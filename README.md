@@ -50,12 +50,24 @@ make WAVES=1    # also writes dump.vcd
 make clean
 ```
 
-Two tests should pass:
+Compositor tests (`TOPLEVEL=top`):
 - `test_passthrough` — OSD off ⇒ output equals the input gradient exactly.
-- `test_overlay` — OSD on ⇒ blended inside the rectangle, untouched outside.
+- `test_framebuffer_overlay` — OSD on ⇒ framebuffer texel blended inside the
+  window (with master fade), untouched outside.
 
-Both compare against a Python model of the *exact* gradient and blend math, so
-any logic change that breaks a pixel fails the build.
+UART control-plane tests (run separately):
+
+```sh
+make TOPLEVEL=top_uart MODULE=test_uart
+```
+
+- `test_ping` / `test_get_info` — framing + ACK/INFO responses decode correctly.
+- `test_bad_crc` — a corrupt frame returns NACK with the CRC error code.
+- `test_overlay_upload` — the *full chain*: serial FILL→FB_WRITE→WINDOW/ALPHA/
+  ENABLE actually puts the uploaded overlay on the video output, pixel-exact.
+
+All tests compare against a Python model of the *exact* gradient/blend/CRC math,
+so any logic change that breaks a pixel or a byte fails the build.
 
 ## Scaling to 1080p
 
@@ -96,11 +108,13 @@ OSD pixel color/alpha come from the framebuffer, not registers.
 ## Next steps (in rough order)
 
 1. ~~**Framebuffer OSD**~~ — done (`osd_fb.v`).
-2. **UART front-end** — a command parser that drives `ctrl_regs` (and the
-   framebuffer port), the way the Linux host's serial link eventually will.
-   Add picture controls (brightness/contrast) as more registers + a pixel-math
-   stage.
-3. **OSD upscaler** — render OSD at e.g. 720p and bilinear-upscale to active,
+2. ~~**UART front-end**~~ — done (`uart_rx.v`, `uart_tx.v`, `cmd_parser.v`,
+   `top_uart.v`); implements `docs/uart-protocol.md`.
+3. **Picture controls** — add BRIGHTNESS/CONTRAST registers + a pixel-math stage
+   in the compositor (the protocol already reserves the opcodes).
+4. **OSD upscaler** — render OSD at e.g. 720p and bilinear-upscale to active,
    so the framebuffer stays small but the overlay looks crisp at 1080p.
-4. **Real I/O** — swap `pattern_gen` for the vendor DP RX IP and the output
+5. **Real I/O** — swap `pattern_gen` for the vendor DP RX IP and the output
    for LVDS, on the chosen prototype board.
+
+See `docs/uart-protocol.md` for the host (Pi) serial protocol.

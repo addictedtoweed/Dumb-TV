@@ -15,10 +15,16 @@ VERILOG_SOURCES = \
     $(PWD)/rtl/ctrl_regs.v \
     $(PWD)/rtl/osd_fb.v \
     $(PWD)/rtl/osd_compositor.v \
-    $(PWD)/rtl/top.v
+    $(PWD)/rtl/top.v \
+    $(PWD)/rtl/uart_rx.v \
+    $(PWD)/rtl/uart_tx.v \
+    $(PWD)/rtl/cmd_parser.v \
+    $(PWD)/rtl/top_uart.v
 
-TOPLEVEL = top
-MODULE   = test_compositor
+# Default target is the compositor pipeline. Run the UART suite with:
+#   make TOPLEVEL=top_uart MODULE=test_uart
+TOPLEVEL ?= top
+MODULE   ?= test_compositor
 
 export PYTHONPATH := $(PWD)/tb:$(PYTHONPATH)
 
