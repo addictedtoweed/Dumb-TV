@@ -1,0 +1,6 @@
+# Force LF on text sources so Makefile/heredocs work under MSYS2 + WSL
+*.v        text eol=lf
+*.sv       text eol=lf
+*.py       text eol=lf
+Makefile   text eol=lf
+*.md       text eol=lf

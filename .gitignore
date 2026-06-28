@@ -1,0 +1,6 @@
+# cocotb / Verilator build output
+sim_build/
+__pycache__/
+*.pyc
+dump.vcd
+results.xml
