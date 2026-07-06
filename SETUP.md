@@ -1,57 +1,62 @@
 # Dev environment setup
 
-The simulation stack is **Verilator + cocotb**. The reliable way to run it on
-this Windows machine is **WSL (Ubuntu)** — MSYS2 was a dead end because its
-mingw64 Python moved to 3.14, and cocotb 2.x only supports Python ≤ 3.13.
+The simulation stack is **Verilator + cocotb**, run under **WSL (Ubuntu)**.
+This file records the exact working setup, including the version pitfalls we hit.
 
-## 1. Install WSL (once)
+## The version pitfalls (why the steps look the way they do)
 
-In an **Administrator** PowerShell:
+- **Python**: Ubuntu 26.04 (and current MSYS2) ship **Python 3.14**, but cocotb
+  only supports **≤ 3.13**. We install a standalone **Python 3.13** with `uv`.
+- **Verilator vs cocotb**: apt's Verilator is **5.032**, but cocotb **2.x**
+  requires **≥ 5.036**. So we use **cocotb 1.9.x**, which is fine with 5.032.
+- **Spaces in the path**: the repo lives under `.../IP Freely/...`. `make` and
+  Verilator both choke on spaces, so the Makefile uses relative source paths and
+  the build directory is redirected to a space-free location (`/tmp/...`).
+  `sim.sh` handles this for you.
+
+## 1. Install WSL (once, Administrator PowerShell)
 
 ```powershell
 wsl --install -d Ubuntu
 ```
 
-Reboot when prompted. On first launch, Ubuntu asks for a UNIX username and
-password (that password is what `sudo` uses).
+Reboot; set a UNIX username/password on first launch.
 
-## 2. Toolchain + Python deps (inside Ubuntu)
+## 2. Verilator (needs sudo)
 
 ```sh
-sudo apt update
-sudo apt install -y verilator make python3 python3-venv g++
-verilator --version          # expect 5.x (Ubuntu 24.04 ships 5.020)
-
-python3 -m venv ~/dumbtv-venv
-source ~/dumbtv-venv/bin/activate
-pip install cocotb
+sudo apt update && sudo apt install -y verilator
+verilator --version        # 5.032 is what we tested against
 ```
 
-> If `verilator --version` reports **4.x**, it's too old for cocotb 2.x. Install
-> the **OSS CAD Suite** (YosysHQ prebuilt bundle, includes a recent Verilator),
-> extract it, and prepend its `bin/` to your `PATH` instead of the apt package.
+## 3. Python 3.13 + cocotb (no sudo)
 
-## 3. Run the tests
+```sh
+# uv: standalone Python/venv manager
+curl -LsSf https://astral.sh/uv/install.sh | sh
+export PATH="$HOME/.local/bin:$PATH"
 
-The repo lives on the Windows drive, reachable from WSL at `/mnt/c/...`:
+uv python install 3.13
+uv venv ~/dumbtv-venv --python 3.13
+uv pip install --python ~/dumbtv-venv/bin/python "cocotb<2"
+```
+
+## 4. Run the tests
 
 ```sh
 cd "/mnt/c/Users/IP Freely/Documents/Source/Dumb-TV"
 
-# compositor pipeline
-make
-
-# UART control plane
-make TOPLEVEL=top_uart MODULE=test_uart
+./sim.sh                                     # compositor pipeline  (2 tests)
+./sim.sh TOPLEVEL=top_uart MODULE=test_uart  # UART control plane   (4 tests)
 ```
 
-Each `make` run elaborates one top-level. `make clean` removes `sim_build/`.
+`sim.sh` activates the venv and sets a space-free `SIM_BUILD`. Expected result:
+both suites report `PASS=N FAIL=0`.
 
-## Notes / gotchas
+## Notes
 
-- Re-activate the venv (`source ~/dumbtv-venv/bin/activate`) in every new shell
-  before running `make`, or cocotb won't be found.
-- Line endings: `.gitattributes` forces LF on sources so the Makefile and shell
-  heredocs work under both WSL and MSYS2.
-- The cocotb tests are self-checking against Python models of the exact
-  gradient/blend/CRC math; a passing run means the RTL matches the spec.
+- New shell? `sim.sh` re-activates the venv itself, so you can just run it.
+- `make clean` from the repo won't touch the `/tmp` build dirs; remove them with
+  `rm -rf /tmp/dumbtv_build_*` if you want a fully clean rebuild.
+- If you ever upgrade to a Verilator ≥ 5.036 (e.g. via the OSS CAD Suite), you
+  can move back to `cocotb` 2.x by reinstalling without the `<2` pin.

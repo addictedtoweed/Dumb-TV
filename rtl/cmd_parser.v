@@ -54,7 +54,7 @@ module cmd_parser #(
     reg [7:0]  cmd, crc, len_lo;
     reg [15:0] len, pay_idx;
     reg        bad_len;
-    reg [7:0]  buf [0:7];          // payload buffer for small commands
+    reg [7:0]  pbuf [0:7];          // payload buffer for small commands
 
     // fb-write streaming
     reg [15:0] fb_addr;
@@ -172,7 +172,7 @@ module cmd_parser #(
                             tcount <= (tcount == 2'd3) ? 2'd0 : tcount + 1'b1;
                         end
                     end else begin
-                        if (pay_idx < 16'd8) buf[pay_idx[2:0]] <= rx_data;
+                        if (pay_idx < 16'd8) pbuf[pay_idx[2:0]] <= rx_data;
                     end
                     pay_idx <= pay_idx + 1'b1;
                     if (pay_idx == len - 1) state <= S_CRC;
@@ -188,19 +188,19 @@ module cmd_parser #(
                         OP_PING: begin build_ack(cmd); state <= S_RLOAD; end
                         OP_INFO: begin build_info;     state <= S_RLOAD; end
                         OP_EN: begin
-                            ctrl_addr <= A_EN; ctrl_wdata <= {8'd0, buf[0]}; ctrl_we <= 1'b1;
+                            ctrl_addr <= A_EN; ctrl_wdata <= {8'd0, pbuf[0]}; ctrl_we <= 1'b1;
                             build_ack(cmd); state <= S_RLOAD;
                         end
                         OP_ALPHA: begin
-                            ctrl_addr <= A_ALPHA; ctrl_wdata <= {8'd0, buf[0]}; ctrl_we <= 1'b1;
+                            ctrl_addr <= A_ALPHA; ctrl_wdata <= {8'd0, pbuf[0]}; ctrl_we <= 1'b1;
                             build_ack(cmd); state <= S_RLOAD;
                         end
                         OP_WIN: begin wsel <= 2'd0; state <= S_WIN; end
                         OP_FBW: begin build_ack(cmd); state <= S_RLOAD; end
                         OP_FBF: begin
-                            fill_addr <= {buf[1], buf[0]};
-                            fill_cnt  <= {buf[3], buf[2]};
-                            fill_word <= {buf[4], buf[5], buf[6], buf[7]};
+                            fill_addr <= {pbuf[1], pbuf[0]};
+                            fill_cnt  <= {pbuf[3], pbuf[2]};
+                            fill_word <= {pbuf[4], pbuf[5], pbuf[6], pbuf[7]};
                             state <= S_FILL;
                         end
                         default: begin build_nack(cmd, ERR_UNK); state <= S_RLOAD; end
@@ -212,10 +212,10 @@ module cmd_parser #(
                     // ctrl_regs write samples a matched pair.
                     ctrl_we <= 1'b1;
                     case (wsel)
-                        2'd0: begin ctrl_addr <= A_X0; ctrl_wdata <= {buf[1], buf[0]}; end
-                        2'd1: begin ctrl_addr <= A_Y0; ctrl_wdata <= {buf[3], buf[2]}; end
-                        2'd2: begin ctrl_addr <= A_W;  ctrl_wdata <= {buf[5], buf[4]}; end
-                        2'd3: begin ctrl_addr <= A_H;  ctrl_wdata <= {buf[7], buf[6]}; end
+                        2'd0: begin ctrl_addr <= A_X0; ctrl_wdata <= {pbuf[1], pbuf[0]}; end
+                        2'd1: begin ctrl_addr <= A_Y0; ctrl_wdata <= {pbuf[3], pbuf[2]}; end
+                        2'd2: begin ctrl_addr <= A_W;  ctrl_wdata <= {pbuf[5], pbuf[4]}; end
+                        2'd3: begin ctrl_addr <= A_H;  ctrl_wdata <= {pbuf[7], pbuf[6]}; end
                     endcase
                     if (wsel == 2'd3) begin build_ack(OP_WIN); state <= S_RLOAD; end
                     else              wsel <= wsel + 1'b1;

@@ -9,6 +9,7 @@ Run with:  make TOPLEVEL=top_uart MODULE=test_uart
 """
 
 import struct
+from collections import deque
 import cocotb
 from cocotb.clock import Clock
 from cocotb.triggers import RisingEdge
@@ -80,15 +81,12 @@ async def send_frame(dut, cmd, payload=b""):
 
 
 async def recv_byte(dut):
-    # wait for start bit
-    guard = 0
+    # block until the start bit (TX idles high, falls low to start), then
+    # sample each bit at its center. No timeout: this is driven by a always-on
+    # monitor, so idle gaps between response frames are normal.
     while int(dut.tx.value) == 1:
         await RisingEdge(dut.clk)
-        guard += 1
-        if guard > 400 * CLKS_PER_BIT:
-            raise TimeoutError("no TX start bit")
-    # advance to center of bit 0
-    await clks(dut, CLKS_PER_BIT + CLKS_PER_BIT // 2)
+    await clks(dut, CLKS_PER_BIT + CLKS_PER_BIT // 2)   # center of bit 0
     val = 0
     for i in range(8):
         val |= (int(dut.tx.value) & 1) << i
@@ -96,15 +94,33 @@ async def recv_byte(dut):
     return val
 
 
-async def recv_frame(dut):
-    sync = await recv_byte(dut)
+async def uart_tx_monitor(dut, q):
+    """Continuously decode the device TX line into a byte queue."""
+    while True:
+        q.append(await recv_byte(dut))
+
+
+def start_monitor(dut):
+    q = deque()
+    cocotb.start_soon(uart_tx_monitor(dut, q))
+    return q
+
+
+async def get_byte(dut, q):
+    while not q:
+        await RisingEdge(dut.clk)
+    return q.popleft()
+
+
+async def recv_frame(dut, q):
+    sync = await get_byte(dut, q)
     assert sync == SYNC, f"bad sync 0x{sync:02x}"
-    cmd = await recv_byte(dut)
-    lo = await recv_byte(dut)
-    hi = await recv_byte(dut)
+    cmd = await get_byte(dut, q)
+    lo = await get_byte(dut, q)
+    hi = await get_byte(dut, q)
     length = lo | (hi << 8)
-    payload = bytes([await recv_byte(dut) for _ in range(length)])
-    crc = await recv_byte(dut)
+    payload = bytes([await get_byte(dut, q) for _ in range(length)])
+    crc = await get_byte(dut, q)
     assert crc == crc8(bytes([cmd, lo, hi]) + payload), "bad response CRC"
     return cmd, payload
 
@@ -143,8 +159,9 @@ async def capture_frame(dut, n_frames=6):
 async def test_ping(dut):
     cocotb.start_soon(Clock(dut.clk, 10, units="ns").start())
     await reset(dut)
+    q = start_monitor(dut)
     await send_frame(dut, OP_PING)
-    cmd, pl = await recv_frame(dut)
+    cmd, pl = await recv_frame(dut, q)
     assert cmd == RSP_ACK and pl == bytes([OP_PING]), (hex(cmd), pl)
 
 
@@ -152,8 +169,9 @@ async def test_ping(dut):
 async def test_get_info(dut):
     cocotb.start_soon(Clock(dut.clk, 10, units="ns").start())
     await reset(dut)
+    q = start_monitor(dut)
     await send_frame(dut, OP_INFO)
-    cmd, pl = await recv_frame(dut)
+    cmd, pl = await recv_frame(dut, q)
     assert cmd == RSP_INFO, hex(cmd)
     proto, fwma, fwmi, ow, oh, mw, mh, flags = struct.unpack("<BBBHHHHB", pl)
     assert (ow, oh) == (OSD_W, OSD_H), (ow, oh)
@@ -163,10 +181,11 @@ async def test_get_info(dut):
 async def test_bad_crc(dut):
     cocotb.start_soon(Clock(dut.clk, 10, units="ns").start())
     await reset(dut)
+    q = start_monitor(dut)
     # PING frame with deliberately wrong CRC
     for b in [SYNC, OP_PING, 0x00, 0x00, 0xEE]:
         await send_byte(dut, b)
-    cmd, pl = await recv_frame(dut)
+    cmd, pl = await recv_frame(dut, q)
     assert cmd == RSP_NACK and pl[0] == OP_PING and pl[1] == 0x01, (hex(cmd), pl)
 
 
@@ -175,10 +194,11 @@ async def test_overlay_upload(dut):
     """Upload an overlay over UART and verify it appears blended in the video."""
     cocotb.start_soon(Clock(dut.clk, 10, units="ns").start())
     await reset(dut)
+    q = start_monitor(dut)
 
     # clear framebuffer (transparent)
     await send_frame(dut, OP_FBF, struct.pack("<HH", 0, OSD_W * OSD_H) + bytes([0, 0, 0, 0]))
-    cmd, _ = await recv_frame(dut); assert cmd == RSP_ACK
+    cmd, _ = await recv_frame(dut, q); assert cmd == RSP_ACK
 
     # upload image (addr 0, then OSD_W*OSD_H texels A,R,G,B)
     texels = bytearray()
@@ -187,15 +207,15 @@ async def test_overlay_upload(dut):
             a, r, g, b = osd_image(cx, cy)
             texels += bytes([a, r, g, b])
     await send_frame(dut, OP_FBW, struct.pack("<H", 0) + bytes(texels))
-    cmd, _ = await recv_frame(dut); assert cmd == RSP_ACK
+    cmd, _ = await recv_frame(dut, q); assert cmd == RSP_ACK
 
     x0, y0, w, h, master = 4, 2, OSD_W, OSD_H, 200
     await send_frame(dut, OP_WIN, struct.pack("<HHHH", x0, y0, w, h))
-    cmd, _ = await recv_frame(dut); assert cmd == RSP_ACK
+    cmd, _ = await recv_frame(dut, q); assert cmd == RSP_ACK
     await send_frame(dut, OP_ALPHA, bytes([master]))
-    cmd, _ = await recv_frame(dut); assert cmd == RSP_ACK
+    cmd, _ = await recv_frame(dut, q); assert cmd == RSP_ACK
     await send_frame(dut, OP_EN, bytes([1]))
-    cmd, _ = await recv_frame(dut); assert cmd == RSP_ACK
+    cmd, _ = await recv_frame(dut, q); assert cmd == RSP_ACK
 
     frame = await capture_frame(dut)
     assert frame, "no video captured"

@@ -76,7 +76,7 @@ module osd_compositor #(
     wire [15:0] x16 = {{(16-CW){1'b0}}, x};
     wire [15:0] y16 = {{(16-CW){1'b0}}, y};
 
-    wire inside = osd_enable
+    wire osd_hit = osd_enable
                && (x16 >= osd_x0) && (x16 < osd_x0 + osd_w)
                && (y16 >= osd_y0) && (y16 < osd_y0 + osd_h);
 
@@ -103,7 +103,7 @@ module osd_compositor #(
             de_s1     <= in_de;
             hs_s1     <= in_hsync;
             vs_s1     <= in_vsync;
-            inside_s1 <= inside;
+            inside_s1 <= osd_hit;
             r_s1      <= in_r;
             g_s1      <= in_g;
             b_s1      <= in_b;
