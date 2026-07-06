@@ -43,12 +43,16 @@ def pattern(x, y):
     return (x & 0xFF, y & 0xFF, 0x40)
 
 
-def blend(vid, ov, a):
-    return (vid * (256 - a) + ov * a) >> 8
+def _w(a):
+    return a + (a >> 7)          # 0..255 alpha -> 0..256 weight
+
+
+def blend(vid, ov, w):
+    return (vid * (256 - w) + ov * w) >> 8
 
 
 def eff_alpha(fb_a, master):
-    return (fb_a * master) >> 8
+    return (_w(fb_a) * _w(master)) >> 8
 
 
 def osd_image(cx, cy):
@@ -187,6 +191,19 @@ async def test_bad_crc(dut):
         await send_byte(dut, b)
     cmd, pl = await recv_frame(dut, q)
     assert cmd == RSP_NACK and pl[0] == OP_PING and pl[1] == 0x01, (hex(cmd), pl)
+
+
+@cocotb.test()
+async def test_fb_range(dut):
+    """FB_WRITE that runs past the framebuffer end returns NACK(range=0x04)."""
+    cocotb.start_soon(Clock(dut.clk, 10, units="ns").start())
+    await reset(dut)
+    q = start_monitor(dut)
+    # depth = OSD_W*OSD_H = 32; start at 30 with 4 texels -> 32,33 out of range
+    payload = struct.pack("<H", 30) + bytes([0, 0, 0, 0] * 4)
+    await send_frame(dut, OP_FBW, payload)
+    cmd, pl = await recv_frame(dut, q)
+    assert cmd == RSP_NACK and pl[0] == OP_FBW and pl[1] == 0x04, (hex(cmd), pl)
 
 
 @cocotb.test()

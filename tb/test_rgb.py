@@ -43,12 +43,16 @@ def pattern(x, y):
     return (x & 0xFF, y & 0xFF, 0x40)
 
 
-def blend(vid, ov, a):
-    return (vid * (256 - a) + ov * a) >> 8
+def _w(a):
+    return a + (a >> 7)          # 0..255 alpha -> 0..256 weight
+
+
+def blend(vid, ov, w):
+    return (vid * (256 - w) + ov * w) >> 8
 
 
 def eff_alpha(fb_a, master):
-    return (fb_a * master) >> 8
+    return (_w(fb_a) * _w(master)) >> 8
 
 
 def osd_image(cx, cy):

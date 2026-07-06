@@ -40,7 +40,8 @@ module cmd_parser #(
                OP_EN   = 8'h10, OP_WIN   = 8'h11, OP_ALPHA = 8'h12,
                OP_FBW  = 8'h20, OP_FBF   = 8'h21;
     localparam RSP_ACK = 8'h80, RSP_NACK = 8'h81, RSP_INFO = 8'h82;
-    localparam ERR_CRC = 8'h01, ERR_LEN  = 8'h02, ERR_UNK  = 8'h03;
+    localparam ERR_CRC = 8'h01, ERR_LEN  = 8'h02, ERR_UNK  = 8'h03, ERR_RANGE = 8'h04;
+    localparam [15:0] FB_DEPTH = OSD_W * OSD_H;   // framebuffer size in texels
     // ---- ctrl_regs addresses (match ctrl_regs.v) ----
     localparam A_EN = 4'd0, A_X0 = 4'd1, A_Y0 = 4'd2, A_W = 4'd3, A_H = 4'd4, A_ALPHA = 4'd5;
     // ---- INFO constants ----
@@ -54,6 +55,7 @@ module cmd_parser #(
     reg [7:0]  cmd, crc, len_lo;
     reg [15:0] len, pay_idx;
     reg        bad_len;
+    reg        range_err;         // a framebuffer write went out of bounds
     reg [7:0]  pbuf [0:7];          // payload buffer for small commands
 
     // fb-write streaming
@@ -137,9 +139,10 @@ module cmd_parser #(
                 end
                 S_LENH: if (rx_valid) begin
                     crc     <= crc8(crc, rx_data);
-                    len     <= len_full;
-                    pay_idx <= 16'd0;
-                    tcount  <= 2'd0;
+                    len       <= len_full;
+                    pay_idx   <= 16'd0;
+                    tcount    <= 2'd0;
+                    range_err <= 1'b0;
                     // length validation per command
                     case (cmd)
                         OP_PING, OP_INFO:  bad_len <= (len_full != 16'd0);
@@ -163,10 +166,14 @@ module cmd_parser #(
                                 2'd1: t_r <= rx_data;
                                 2'd2: t_g <= rx_data;
                                 2'd3: begin
-                                    fb_we    <= 1'b1;
-                                    fb_waddr <= fb_addr[FB_AW-1:0];
-                                    fb_wdata <= {t_a, t_r, t_g, rx_data}; // A,R,G,B
-                                    fb_addr  <= fb_addr + 1'b1;
+                                    if (fb_addr < FB_DEPTH) begin
+                                        fb_we    <= 1'b1;
+                                        fb_waddr <= fb_addr[FB_AW-1:0];
+                                        fb_wdata <= {t_a, t_r, t_g, rx_data}; // A,R,G,B
+                                    end else begin
+                                        range_err <= 1'b1;                    // out of bounds
+                                    end
+                                    fb_addr <= fb_addr + 1'b1;
                                 end
                             endcase
                             tcount <= (tcount == 2'd3) ? 2'd0 : tcount + 1'b1;
@@ -196,7 +203,11 @@ module cmd_parser #(
                             build_ack(cmd); state <= S_RLOAD;
                         end
                         OP_WIN: begin wsel <= 2'd0; state <= S_WIN; end
-                        OP_FBW: begin build_ack(cmd); state <= S_RLOAD; end
+                        OP_FBW: begin
+                            if (range_err) build_nack(cmd, ERR_RANGE);
+                            else           build_ack(cmd);
+                            state <= S_RLOAD;
+                        end
                         OP_FBF: begin
                             fill_addr <= {pbuf[1], pbuf[0]};
                             fill_cnt  <= {pbuf[3], pbuf[2]};
@@ -223,13 +234,19 @@ module cmd_parser #(
                 // ---------------- OSD_FB_FILL: write `count` texels ----------------
                 S_FILL: begin
                     if (fill_cnt != 16'd0) begin
-                        fb_we     <= 1'b1;
-                        fb_waddr  <= fill_addr[FB_AW-1:0];
-                        fb_wdata  <= fill_word;
+                        if (fill_addr < FB_DEPTH) begin
+                            fb_we    <= 1'b1;
+                            fb_waddr <= fill_addr[FB_AW-1:0];
+                            fb_wdata <= fill_word;
+                        end else begin
+                            range_err <= 1'b1;                // out of bounds
+                        end
                         fill_addr <= fill_addr + 1'b1;
                         fill_cnt  <= fill_cnt - 1'b1;
                     end else begin
-                        build_ack(OP_FBF); state <= S_RLOAD;
+                        if (range_err) build_nack(OP_FBF, ERR_RANGE);
+                        else           build_ack(OP_FBF);
+                        state <= S_RLOAD;
                     end
                 end
                 // ---------------- transmit response ----------------

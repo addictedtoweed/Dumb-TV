@@ -30,14 +30,19 @@ def pattern(x, y):
     return (x & 0xFF, y & 0xFF, 0x40)
 
 
-def blend(vid, ov, a):
-    """Mirror of blend8() in rtl/osd_compositor.v."""
-    return (vid * (256 - a) + ov * a) >> 8
+def _w(a):
+    """0..255 alpha -> 0..256 weight (255 -> 256); mirrors the rtl."""
+    return a + (a >> 7)
+
+
+def blend(vid, ov, w):
+    """Mirror of blend8() in rtl/osd_compositor.v (w is a 0..256 weight)."""
+    return (vid * (256 - w) + ov * w) >> 8
 
 
 def eff_alpha(fb_a, master):
-    """Mirror of eff_a in rtl/osd_compositor.v."""
-    return (fb_a * master) >> 8
+    """Mirror of eff_w in rtl/osd_compositor.v: combined 0..256 weight."""
+    return (_w(fb_a) * _w(master)) >> 8
 
 
 def osd_image(cx, cy):

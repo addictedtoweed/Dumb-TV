@@ -118,23 +118,29 @@ module osd_compositor #(
     wire [7:0] fb_g = fb_rdata[15:8];
     wire [7:0] fb_b = fb_rdata[7:0];
 
-    wire [15:0] am    = fb_a * osd_alpha;   // per-pixel * master
-    wire [7:0]  eff_a = am[15:8];           // / 256
+    // Map an 0..255 alpha to an 0..256 weight so 255 means *fully* opaque:
+    // 255 + (255>>7) = 256, 0 + 0 = 0, endpoints exact. Combine per-pixel and
+    // master weights in that 0..256 space, so fb_a=255 & master=255 => exact
+    // overlay (no residual video bleed-through).
+    wire [8:0]  fb_w     = fb_a      + (fb_a      >> 7);   // 0..256
+    wire [8:0]  master_w = osd_alpha + (osd_alpha >> 7);   // 0..256
+    wire [16:0] effp     = fb_w * master_w;                // 0..65536
+    wire [8:0]  eff_w    = effp[16:8];                     // 0..256
 
     function [7:0] blend8;
         input [7:0] vid;
         input [7:0] ov;
-        input [7:0] a;
+        input [8:0] w;                                     // weight, 0..256
         reg [16:0] t;
         begin
-            t = vid * (9'd256 - a) + ov * a;
+            t = vid * (9'd256 - w) + ov * w;
             blend8 = t[15:8];
         end
     endfunction
 
-    wire [7:0] br = inside_s1 ? blend8(r_s1, fb_r, eff_a) : r_s1;
-    wire [7:0] bg = inside_s1 ? blend8(g_s1, fb_g, eff_a) : g_s1;
-    wire [7:0] bb = inside_s1 ? blend8(b_s1, fb_b, eff_a) : b_s1;
+    wire [7:0] br = inside_s1 ? blend8(r_s1, fb_r, eff_w) : r_s1;
+    wire [7:0] bg = inside_s1 ? blend8(g_s1, fb_g, eff_w) : g_s1;
+    wire [7:0] bb = inside_s1 ? blend8(b_s1, fb_b, eff_w) : b_s1;
 
     always @(posedge clk) begin
         if (rst) begin
