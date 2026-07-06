@@ -40,7 +40,8 @@ module osd_compositor #(
     input  wire [15:0] osd_w,
     input  wire [15:0] osd_h,
     input  wire [7:0]  osd_alpha,    // master fade, 0..255
-    // OSD framebuffer write port (host / CPU)
+    // OSD framebuffer write port (host / CPU, on its own clock)
+    input  wire           fb_wr_clk,
     input  wire           fb_we,
     input  wire [FB_AW-1:0] fb_waddr,
     input  wire [31:0]    fb_wdata,
@@ -86,8 +87,9 @@ module osd_compositor #(
 
     wire [31:0] fb_rdata;
     osd_fb #(.OSD_W(OSD_W), .OSD_H(OSD_H), .AW(FB_AW)) u_fb (
-        .clk(clk),
+        .wr_clk(fb_wr_clk),
         .we(fb_we), .waddr(fb_waddr), .wdata(fb_wdata),
+        .rd_clk(clk),
         .raddr(raddr), .rdata(fb_rdata)
     );
 

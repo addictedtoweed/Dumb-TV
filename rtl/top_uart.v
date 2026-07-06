@@ -83,6 +83,7 @@ module top_uart #(
         .osd_enable(osd_enable),
         .osd_x0(osd_x0), .osd_y0(osd_y0), .osd_w(osd_w), .osd_h(osd_h),
         .osd_alpha(osd_alpha),
+        .fb_wr_clk(clk),
         .fb_we(fb_we), .fb_waddr(fb_waddr), .fb_wdata(fb_wdata),
         .out_de(out_de), .out_hsync(out_hsync), .out_vsync(out_vsync),
         .out_r(out_r), .out_g(out_g), .out_b(out_b));
