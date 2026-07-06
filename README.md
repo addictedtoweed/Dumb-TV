@@ -1,22 +1,32 @@
-# dp-osd-fpga — simulation-first scaffold
+# Dumb-TV — simulation-first OSD scaffold
 
-A tiny, fully-testable Verilog pipeline for the "dumb TV" video path:
+A tiny, fully-testable Verilog pipeline for the "dumb TV" video path.
+
+**Input is parallel RGB.** The FPGA does *not* receive HDMI/DVI/DP itself — an
+off-the-shelf transceiver/bridge chip (e.g. Lontium LT-series or TI TFP401)
+receives the high-speed standard and hands the FPGA a generic parallel video bus
+(pixel clock + DE/HSync/VSync + 24-bit RGB). The proprietary standard, and any
+license, stays sealed inside that chip; the published FPGA bitstream carries no
+licensed IP, needs no fabric transceivers, and works on a cheap FPGA. Swap the
+bridge to change input standard.
 
 ```
-  video_timing + pattern_gen        osd_compositor              (output)
-  ───────────────────────────►  ───────────────────────►  ───────────────►
-   stand-in for DP RX            recover (x,y) from de,      to LVDS (1080p
-   (gradient test pattern)       alpha-blend OSD over        prototype) or
-                                 video, 1-clock latency      DP TX (product)
-                                        ▲
-                                   ctrl_regs  ◄── UART control plane
-                                   (OSD pos/size/color/alpha, picture ctrl)
+  bridge chip ──▶ rgb_in ──▶      osd_compositor          ──▶  (output)
+  (HDMI/DVI/DP    sample the   recover (x,y) from de,        to LVDS (1080p
+   → parallel     parallel     alpha-blend OSD over          prototype) or
+   RGB; off-the-  bus (pixel   video, 1-clock latency        panel adapter
+   shelf)         clock)               ▲
+                                  ctrl_regs  ◄── UART control plane
+                                  (OSD pos/size/alpha, glyph blits, picture ctrl)
 ```
+
+In simulation, `video_timing + pattern_gen` stands in for the bridge's parallel
+output (a gradient test pattern) so the whole pipeline runs with zero hardware.
 
 The point of this scaffold: **develop and regression-test the entire
 compositor / OSD / control logic in Verilator with zero hardware**, then only
-touch a board to validate the PHY/IP plumbing. Everything here is board- and
-vendor-tool independent.
+touch a board to validate the bridge + output plumbing. Everything here is
+board- and vendor-tool independent.
 
 ## What maps to what in the real product
 
