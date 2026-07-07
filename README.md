@@ -20,9 +20,28 @@ bridge to change input standard.
                           (enable/alpha, glyph blits, palette, picture ctrl)
 ```
 
-Both the high-speed input (HDMI/DVI/DP → RGB) and output (RGB → LVDS) are
-handled by commodity bridge/serializer chips, so the FPGA is a pure
-**parallel-RGB processor** — cheap, low pin-count, and carrying no licensed IP.
+### Architecture: deserialize → FPGA middleman → reserialize
+
+The whole product is one idea:
+
+```
+  HDMI/DVI/DP ──▶  bridge chip   ──▶   FPGA (this repo)   ──▶  serializer  ──▶  LVDS panel
+   (serial)       DESERIALIZE          MIDDLEMAN               RESERIALIZE      (serial)
+                  → parallel RGB       mix OSD over RGB        parallel RGB →
+```
+
+1. **Deserialize** — an off-the-shelf bridge chip receives the high-speed serial
+   input and turns it into a parallel RGB bus (pixel clock + DE/HS/VS + 24-bit
+   RGB).
+2. **FPGA middleman** — the FPGA takes that parallel RGB, overlays the OSD, and
+   emits parallel RGB. This is *all* it does; it never touches the serial links.
+3. **Reserialize** — an off-the-shelf RGB-to-LVDS serializer turns the processed
+   parallel RGB into the serial link the panel wants.
+
+Keeping both serial ends in commodity chips means the FPGA is a pure
+**parallel-RGB processor** — cheap, low pin-count, no transceivers, and carrying
+no licensed IP (so the bitstream is freely redistributable). Swap the bridge to
+change input standard; swap the serializer to change panel interface.
 
 In simulation, `video_timing + pattern_gen` stands in for the bridge's parallel
 output (a gradient test pattern) so the whole pipeline runs with zero hardware.
