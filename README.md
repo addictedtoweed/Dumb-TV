@@ -55,6 +55,21 @@ plane runs on an independent system clock (`top_rgb`). The two crossings are the
 dual-clock `osd_fb` (pixel data) and `sync2` on the quasi-static OSD config.
 `top.v` / `top_uart.v` keep everything on one clock for simpler unit tests.
 
+**Canvas storage — BRAM or external PSRAM (build-selectable).** The OSD canvas
+is a swappable module behind a `(cx, cy, new_frame) -> index` read contract:
+
+```
+make            # CANVAS=bram  (default): canvas in on-chip block RAM
+make CANVAS=psram   # canvas in external SDRAM/PSRAM (many cheap FPGAs bundle ~64 Mbit)
+```
+
+`osd_fb_bram.v` is a plain dual-port RAM. `osd_fb_psram.v` is the same interface
+backed by external memory, with a BRAM line-buffer prefetch (the `cx/cy/new_frame`
+port is what lets it hide the memory latency) — the sim uses a behavioral memory
+model so the whole OSD verifies against the PSRAM build, and the header marks the
+board memory-controller integration point. Both pass the full suite unchanged, so
+open-source builds pick whichever their board favors.
+
 Low latency / "zero frame interpolation" is structural: we blend per-pixel as
 the stream flows (one clock), never buffering a frame, so we never synthesize
 new frames. Genlock the output clock to the input clock on hardware to keep

@@ -74,15 +74,18 @@ module osd_compositor #(
             else if (in_de_d && !in_de) y_acc <= y_acc + Y_STEP;   // next line
         end
     end
-    wire [CXW-1:0]   cx    = x_acc[FRAC + CXW - 1 : FRAC];
-    wire [CYW-1:0]   cy    = y_acc[FRAC + CYW - 1 : FRAC];
-    wire [FB_AW-1:0] raddr = cy * OSD_W + cx;
+    wire [CXW-1:0] cx = x_acc[FRAC + CXW - 1 : FRAC];
+    wire [CYW-1:0] cy = y_acc[FRAC + CYW - 1 : FRAC];
 
     // ---- canvas (indexed) : read gives index one clock later ----
+    // The (cx, cy, new_frame) read port is the swappable canvas-storage seam:
+    // osd_fb is osd_fb_bram.v (BRAM) or osd_fb_psram.v (external memory),
+    // selected by the build (CANVAS=bram|psram). new_frame = vsync lets the
+    // PSRAM backend restart its line-buffer prefetch at row 0.
     wire [3:0] cidx;
     osd_fb #(.OSD_W(OSD_W), .OSD_H(OSD_H), .AW(FB_AW)) u_fb (
         .wr_clk(fb_wr_clk), .we(fb_we), .waddr(fb_waddr), .wdata(fb_wdata),
-        .rd_clk(clk), .raddr(raddr), .rdata(cidx));
+        .rd_clk(clk), .rd_cx(cx), .rd_cy(cy), .rd_newframe(in_vsync), .rdata(cidx));
 
     // ---- palette : addressed by the canvas index, RGBA one clock later ----
     wire [31:0] pcolor;

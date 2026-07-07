@@ -7,13 +7,17 @@
 TOPLEVEL_LANG ?= verilog
 SIM           ?= verilator
 
+# OSD canvas storage backend: bram (on-chip, default) or psram (external memory).
+#   make CANVAS=psram ...
+CANVAS ?= bram
+
 # Relative paths on purpose: absolute paths break `make` when the repo lives
 # under a directory containing a space (e.g. "IP Freely").
 VERILOG_SOURCES = \
     rtl/video_timing.v \
     rtl/pattern_gen.v \
     rtl/ctrl_regs.v \
-    rtl/osd_fb.v \
+    rtl/osd_fb_$(CANVAS).v \
     rtl/palette.v \
     rtl/osd_compositor.v \
     rtl/top.v \
