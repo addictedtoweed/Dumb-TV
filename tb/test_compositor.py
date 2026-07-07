@@ -1,54 +1,61 @@
-"""cocotb testbench for the OSD compositor pipeline (framebuffer OSD).
+"""cocotb testbench for the full-screen indexed OSD compositor (top).
 
-Runs the whole top-level (timing + pattern + ctrl + framebuffer + compositor)
-in Verilator, loads an OSD image into the framebuffer, reconstructs each output
-frame from out_de/out_vsync, and checks every pixel against a Python model of
-the exact gradient + per-pixel-alpha blend math.
+Loads a palette and a canvas of 4-bit indices via the direct write ports, then
+checks the output pixel-for-pixel: each active screen pixel maps (via the
+nearest-neighbour upscaler) to a canvas texel, whose palette color is blended
+over the video. Index 0 is transparent.
 
-Run with:  make           (see ../Makefile)
+Run with:  make    (TOPLEVEL=top MODULE=test_compositor)
 """
 
 import cocotb
 from cocotb.clock import Clock
 from cocotb.triggers import RisingEdge
 
-# Control register map (must match rtl/ctrl_regs.v)
-A_ENABLE, A_X0, A_Y0, A_W, A_H, A_ALPHA = range(6)
-
-# Tiny default timing baked into video_timing.v
-H_ACTIVE, H_TOTAL = 16, 22   # 16 + 2 + 2 + 2
-V_ACTIVE, V_TOTAL = 8, 11    # 8 + 1 + 1 + 1
+# geometry (match top / video_timing defaults)
+H_TOTAL, V_TOTAL = 22, 11
 FRAME_CYCLES = H_TOTAL * V_TOTAL
-
-# OSD framebuffer size (must match top.v defaults: OSD_W, OSD_H)
+ACTIVE_W, ACTIVE_H = 16, 8
 OSD_W, OSD_H = 8, 4
-LX = OSD_W.bit_length() - 1   # log2, OSD_W is a power of two
+X_STEP = (OSD_W << 16) // ACTIVE_W
+Y_STEP = (OSD_H << 16) // ACTIVE_H
+
+# ctrl_regs addresses
+A_ENABLE, A_ALPHA = 0, 1
 
 
 def pattern(x, y):
-    """Mirror of rtl/pattern_gen.v."""
     return (x & 0xFF, y & 0xFF, 0x40)
 
 
 def _w(a):
-    """0..255 alpha -> 0..256 weight (255 -> 256); mirrors the rtl."""
-    return a + (a >> 7)
+    return a + (a >> 7)          # 0..255 alpha -> 0..256 weight
 
 
 def blend(vid, ov, w):
-    """Mirror of blend8() in rtl/osd_compositor.v (w is a 0..256 weight)."""
     return (vid * (256 - w) + ov * w) >> 8
 
 
-def eff_alpha(fb_a, master):
-    """Mirror of eff_w in rtl/osd_compositor.v: combined 0..256 weight."""
-    return (_w(fb_a) * _w(master)) >> 8
+def eff_alpha(pa, master):
+    return (_w(pa) * _w(master)) >> 8
 
 
-def osd_image(cx, cy):
-    """The OSD image we load into the framebuffer. Returns (a, r, g, b)."""
-    a = 255 if ((cx + cy) & 1) == 0 else 128   # checkerboard transparency
-    return (a, (cx * 16) & 0xFF, (cy * 32) & 0xFF, 0xAA)
+def canvas_addr(cx, cy):
+    return cy * OSD_W + cx
+
+
+def scale(x, y):
+    return ((x * X_STEP) >> 16, (y * Y_STEP) >> 16)
+
+
+# the OSD content the test loads
+def canvas_idx(cx, cy):
+    return (cx + 2 * cy) & 3     # indices 0..3 (0 = transparent)
+
+PAL = {0: (0, 0, 0, 0),
+       1: (255, 200, 50, 10),
+       2: (200, 20, 200, 100),
+       3: (128, 80, 10, 240)}    # index -> (A, R, G, B)
 
 
 async def reset(dut):
@@ -59,14 +66,16 @@ async def reset(dut):
     dut.fb_we.value = 0
     dut.fb_waddr.value = 0
     dut.fb_wdata.value = 0
+    dut.pal_we.value = 0
+    dut.pal_waddr.value = 0
+    dut.pal_wdata.value = 0
     for _ in range(5):
         await RisingEdge(dut.clk)
     dut.rst.value = 0
     await RisingEdge(dut.clk)
 
 
-async def wr(dut, addr, data):
-    """Single-cycle control-register write."""
+async def wr_ctrl(dut, addr, data):
     await RisingEdge(dut.clk)
     dut.ctrl_addr.value = addr
     dut.ctrl_wdata.value = data
@@ -75,27 +84,33 @@ async def wr(dut, addr, data):
     dut.ctrl_we.value = 0
 
 
-async def fb_write(dut, cx, cy, a, r, g, b):
-    """Single-cycle framebuffer write at texel (cx, cy)."""
-    addr = (cy << LX) | cx
-    word = (a << 24) | (r << 16) | (g << 8) | b
+async def wr_fb(dut, addr, idx):
     await RisingEdge(dut.clk)
     dut.fb_waddr.value = addr
-    dut.fb_wdata.value = word
+    dut.fb_wdata.value = idx
     dut.fb_we.value = 1
     await RisingEdge(dut.clk)
     dut.fb_we.value = 0
 
 
-async def load_osd_image(dut):
+async def wr_pal(dut, idx, a, r, g, b):
+    await RisingEdge(dut.clk)
+    dut.pal_waddr.value = idx
+    dut.pal_wdata.value = (a << 24) | (r << 16) | (g << 8) | b
+    dut.pal_we.value = 1
+    await RisingEdge(dut.clk)
+    dut.pal_we.value = 0
+
+
+async def load_osd(dut):
+    for i, (a, r, g, b) in PAL.items():
+        await wr_pal(dut, i, a, r, g, b)
     for cy in range(OSD_H):
         for cx in range(OSD_W):
-            a, r, g, b = osd_image(cx, cy)
-            await fb_write(dut, cx, cy, a, r, g, b)
+            await wr_fb(dut, canvas_addr(cx, cy), canvas_idx(cx, cy))
 
 
-async def capture_frame(dut, n_frames=5):
-    """Run for n_frames and return {(x,y): (r,g,b)} for the output stream."""
+async def capture_frame(dut, n_frames=6):
     frame = {}
     ox = oy = prev_de = 0
     for _ in range(n_frames * FRAME_CYCLES):
@@ -119,49 +134,42 @@ async def capture_frame(dut, n_frames=5):
 
 @cocotb.test()
 async def test_passthrough(dut):
-    """OSD disabled -> output must equal the input gradient exactly."""
+    """OSD disabled -> output equals the input gradient exactly."""
     cocotb.start_soon(Clock(dut.clk, 10, units="ns").start())
     await reset(dut)
-    await wr(dut, A_ENABLE, 0)
-
+    await load_osd(dut)
+    await wr_ctrl(dut, A_ENABLE, 0)
     frame = await capture_frame(dut)
-    assert frame, "captured no active pixels"
+    assert frame
     for (x, y), got in frame.items():
-        assert got == pattern(x, y), \
-            f"passthrough mismatch at ({x},{y}): {got} != {pattern(x, y)}"
+        assert got == pattern(x, y), f"passthrough ({x},{y}): {got} != {pattern(x, y)}"
 
 
 @cocotb.test()
-async def test_framebuffer_overlay(dut):
-    """OSD enabled -> per-pixel framebuffer texel blended over video inside the
-    window (with master fade), passthrough outside."""
+async def test_indexed_overlay(dut):
+    """OSD enabled -> upscaled canvas index -> palette color blended over video,
+    index 0 transparent."""
     cocotb.start_soon(Clock(dut.clk, 10, units="ns").start())
     await reset(dut)
-
-    await load_osd_image(dut)
-
-    x0, y0, w, h, master = 4, 2, OSD_W, OSD_H, 200
-    await wr(dut, A_X0, x0)
-    await wr(dut, A_Y0, y0)
-    await wr(dut, A_W, w)
-    await wr(dut, A_H, h)
-    await wr(dut, A_ALPHA, master)
-    await wr(dut, A_ENABLE, 1)
+    await load_osd(dut)
+    master = 200
+    await wr_ctrl(dut, A_ALPHA, master)
+    await wr_ctrl(dut, A_ENABLE, 1)
 
     frame = await capture_frame(dut)
-    assert frame, "captured no active pixels"
-
-    inside_seen = False
+    assert frame
+    seen_color = seen_transparent = False
     for (x, y), got in frame.items():
         vr, vg, vb = pattern(x, y)
-        if x0 <= x < x0 + w and y0 <= y < y0 + h:
-            inside_seen = True
-            cx, cy = x - x0, y - y0
-            a, fr, fg, fb_ = osd_image(cx, cy)
-            ea = eff_alpha(a, master)
-            exp = (blend(vr, fr, ea), blend(vg, fg, ea), blend(vb, fb_, ea))
+        cx, cy = scale(x, y)
+        idx = canvas_idx(cx, cy)
+        if idx != 0:
+            seen_color = True
+            a, r, g, b = PAL[idx]
+            w = eff_alpha(a, master)
+            exp = (blend(vr, r, w), blend(vg, g, w), blend(vb, b, w))
         else:
+            seen_transparent = True
             exp = (vr, vg, vb)
-        assert got == exp, \
-            f"overlay mismatch at ({x},{y}): {got} != {exp}"
-    assert inside_seen, "OSD window never appeared in the frame"
+        assert got == exp, f"({x},{y}) idx={idx}: {got} != {exp}"
+    assert seen_color and seen_transparent

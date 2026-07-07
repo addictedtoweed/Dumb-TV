@@ -1,21 +1,26 @@
-// cmd_parser.v  -- implements the Dumb-TV UART control protocol.
+// cmd_parser.v  -- implements the Dumb-TV UART control protocol (indexed OSD).
 //
-// Consumes bytes from uart_rx, decodes framed commands
-//   A5 | CMD | LEN(16 LE) | PAYLOAD | CRC8        (CRC-8/SMBUS, poly 0x07)
-// and drives:
-//   - ctrl_regs writes (OSD enable/window/master-alpha)
-//   - osd_fb framebuffer writes (graphics upload; texels stream as A,R,G,B)
-// then emits an ACK / NACK / INFO response via uart_tx.
+// Frame:  A5 | CMD | LEN(16 LE) | PAYLOAD | CRC8   (CRC-8/SMBUS, poly 0x07)
 //
-// Framebuffer uploads are committed on the fly (no full-frame buffer); a bad
-// CRC returns NACK so the host re-sends that chunk. See docs/uart-protocol.md.
+// Commands:
+//   PING(01)        -> ACK
+//   GET_INFO(02)    -> INFO(proto,fw,osd_w,osd_h,max_w,max_h,flags)
+//   OSD_ENABLE(10)  en(1)
+//   OSD_ALPHA(12)   alpha(1)                       master fade
+//   OSD_FB_WRITE(20) addr(2) + N index bytes       canvas indices (low nibble)
+//   OSD_FB_FILL(21)  addr(2) count(2) index(1)     fill canvas with an index
+//   PALETTE_SET(26)  index(1) A(1) R(1) G(1) B(1)  set a palette entry
+//
+// Writes stream to the canvas / palette as bytes arrive; a bad CRC returns NACK
+// so the host re-sends. Out-of-range framebuffer writes are skipped and return
+// NACK(ERR_RANGE). See docs/uart-protocol.md.
 
 `default_nettype none
 
 module cmd_parser #(
     parameter OSD_W = 8,
     parameter OSD_H = 4,
-    parameter FB_AW = $clog2(OSD_W) + $clog2(OSD_H)
+    parameter FB_AW = $clog2(OSD_W*OSD_H)
 )(
     input  wire        clk,
     input  wire        rst,
@@ -30,45 +35,44 @@ module cmd_parser #(
     output reg  [3:0]  ctrl_addr,
     output reg  [15:0] ctrl_wdata,
     output reg         ctrl_we,
-    // to osd_fb (framebuffer write port)
+    // to osd_fb (canvas index write port)
     output reg         fb_we,
     output reg [FB_AW-1:0] fb_waddr,
-    output reg [31:0]  fb_wdata
+    output reg [3:0]   fb_wdata,
+    // to palette write port
+    output reg         pal_we,
+    output reg [3:0]   pal_waddr,
+    output reg [31:0]  pal_wdata
 );
     // ---- opcodes ----
     localparam OP_PING = 8'h01, OP_INFO  = 8'h02,
-               OP_EN   = 8'h10, OP_WIN   = 8'h11, OP_ALPHA = 8'h12,
-               OP_FBW  = 8'h20, OP_FBF   = 8'h21;
+               OP_EN   = 8'h10, OP_ALPHA = 8'h12,
+               OP_FBW  = 8'h20, OP_FBF   = 8'h21, OP_PAL = 8'h26;
     localparam RSP_ACK = 8'h80, RSP_NACK = 8'h81, RSP_INFO = 8'h82;
     localparam ERR_CRC = 8'h01, ERR_LEN  = 8'h02, ERR_UNK  = 8'h03, ERR_RANGE = 8'h04;
-    localparam [15:0] FB_DEPTH = OSD_W * OSD_H;   // framebuffer size in texels
-    // ---- ctrl_regs addresses (match ctrl_regs.v) ----
-    localparam A_EN = 4'd0, A_X0 = 4'd1, A_Y0 = 4'd2, A_W = 4'd3, A_H = 4'd4, A_ALPHA = 4'd5;
+    // ---- ctrl_regs addresses ----
+    localparam A_EN = 4'd0, A_ALPHA = 4'd1;
     // ---- INFO constants ----
     localparam [15:0] MAX_W = 16'd1920, MAX_H = 16'd1080;
+    localparam [15:0] FB_DEPTH = OSD_W * OSD_H;
 
     // ---- states ----
     localparam S_SYNC=0, S_CMD=1, S_LENL=2, S_LENH=3, S_PAY=4, S_CRC=5,
-               S_EXEC=6, S_WIN=7, S_FILL=8, S_RLOAD=9, S_RWAIT=10;
+               S_EXEC=6, S_FILL=7, S_RLOAD=8, S_RWAIT=9;
     reg [3:0] state;
 
     reg [7:0]  cmd, crc, len_lo;
     reg [15:0] len, pay_idx;
     reg        bad_len;
-    reg        range_err;         // a framebuffer write went out of bounds
-    reg [7:0]  pbuf [0:7];          // payload buffer for small commands
+    reg        range_err;
+    reg [7:0]  pbuf [0:7];         // payload buffer for small commands
 
     // fb-write streaming
     reg [15:0] fb_addr;
-    reg [1:0]  tcount;
-    reg [7:0]  t_a, t_r, t_g;
 
     // fill engine
     reg [15:0] fill_addr, fill_cnt;
-    reg [31:0] fill_word;
-
-    // window write sequencer
-    reg [1:0]  wsel;
+    reg [3:0]  fill_idx;
 
     // response builder
     reg [7:0]  resp [0:15];
@@ -103,7 +107,7 @@ module cmd_parser #(
     task build_info; begin
         resp[0]<=8'hA5; resp[1]<=RSP_INFO; resp[2]<=8'd12; resp[3]<=8'd0;
         resp[4]<=8'd1;                       // protocol version
-        resp[5]<=8'd0; resp[6]<=8'd1;        // fw major.minor
+        resp[5]<=8'd0; resp[6]<=8'd2;        // fw major.minor
         resp[7]<=OSD_W[7:0];  resp[8]<=OSD_W[15:8];
         resp[9]<=OSD_H[7:0];  resp[10]<=OSD_H[15:8];
         resp[11]<=MAX_W[7:0]; resp[12]<=MAX_W[15:8];
@@ -120,11 +124,12 @@ module cmd_parser #(
             tx_start <= 1'b0;
             ctrl_we  <= 1'b0;
             fb_we    <= 1'b0;
+            pal_we   <= 1'b0;
         end else begin
-            // one-shot defaults
             tx_start <= 1'b0;
             ctrl_we  <= 1'b0;
             fb_we    <= 1'b0;
+            pal_we   <= 1'b0;
 
             case (state)
                 // ---------------- receive framing ----------------
@@ -138,19 +143,16 @@ module cmd_parser #(
                     len_lo <= rx_data; crc <= crc8(crc, rx_data); state <= S_LENH;
                 end
                 S_LENH: if (rx_valid) begin
-                    crc     <= crc8(crc, rx_data);
+                    crc       <= crc8(crc, rx_data);
                     len       <= len_full;
                     pay_idx   <= 16'd0;
-                    tcount    <= 2'd0;
                     range_err <= 1'b0;
-                    // length validation per command
                     case (cmd)
-                        OP_PING, OP_INFO:  bad_len <= (len_full != 16'd0);
-                        OP_EN, OP_ALPHA:   bad_len <= (len_full != 16'd1);
-                        OP_WIN, OP_FBF:    bad_len <= (len_full != 16'd8);
-                        OP_FBW:            bad_len <= (len_full < 16'd2) ||
-                                                       (((len_full - 16'd2) & 16'd3) != 16'd0);
-                        default:           bad_len <= 1'b0; // unknown -> NACK in EXEC
+                        OP_PING, OP_INFO: bad_len <= (len_full != 16'd0);
+                        OP_EN, OP_ALPHA:  bad_len <= (len_full != 16'd1);
+                        OP_FBF, OP_PAL:   bad_len <= (len_full != 16'd5);
+                        OP_FBW:           bad_len <= (len_full < 16'd3);
+                        default:          bad_len <= 1'b0; // unknown -> NACK in EXEC
                     endcase
                     state <= (len_full == 16'd0) ? S_CRC : S_PAY;
                 end
@@ -161,22 +163,14 @@ module cmd_parser #(
                         if (pay_idx == 16'd0)      fb_addr[7:0]  <= rx_data;
                         else if (pay_idx == 16'd1) fb_addr[15:8] <= rx_data;
                         else begin
-                            case (tcount)
-                                2'd0: t_a <= rx_data;
-                                2'd1: t_r <= rx_data;
-                                2'd2: t_g <= rx_data;
-                                2'd3: begin
-                                    if (fb_addr < FB_DEPTH) begin
-                                        fb_we    <= 1'b1;
-                                        fb_waddr <= fb_addr[FB_AW-1:0];
-                                        fb_wdata <= {t_a, t_r, t_g, rx_data}; // A,R,G,B
-                                    end else begin
-                                        range_err <= 1'b1;                    // out of bounds
-                                    end
-                                    fb_addr <= fb_addr + 1'b1;
-                                end
-                            endcase
-                            tcount <= (tcount == 2'd3) ? 2'd0 : tcount + 1'b1;
+                            if (fb_addr < FB_DEPTH) begin
+                                fb_we    <= 1'b1;
+                                fb_waddr <= fb_addr[FB_AW-1:0];
+                                fb_wdata <= rx_data[3:0];      // one index per byte
+                            end else begin
+                                range_err <= 1'b1;
+                            end
+                            fb_addr <= fb_addr + 1'b1;
                         end
                     end else begin
                         if (pay_idx < 16'd8) pbuf[pay_idx[2:0]] <= rx_data;
@@ -202,7 +196,6 @@ module cmd_parser #(
                             ctrl_addr <= A_ALPHA; ctrl_wdata <= {8'd0, pbuf[0]}; ctrl_we <= 1'b1;
                             build_ack(cmd); state <= S_RLOAD;
                         end
-                        OP_WIN: begin wsel <= 2'd0; state <= S_WIN; end
                         OP_FBW: begin
                             if (range_err) build_nack(cmd, ERR_RANGE);
                             else           build_ack(cmd);
@@ -211,35 +204,27 @@ module cmd_parser #(
                         OP_FBF: begin
                             fill_addr <= {pbuf[1], pbuf[0]};
                             fill_cnt  <= {pbuf[3], pbuf[2]};
-                            fill_word <= {pbuf[4], pbuf[5], pbuf[6], pbuf[7]};
+                            fill_idx  <= pbuf[4][3:0];
                             state <= S_FILL;
+                        end
+                        OP_PAL: begin
+                            pal_we    <= 1'b1;
+                            pal_waddr <= pbuf[0][3:0];
+                            pal_wdata <= {pbuf[1], pbuf[2], pbuf[3], pbuf[4]}; // A,R,G,B
+                            build_ack(cmd); state <= S_RLOAD;
                         end
                         default: begin build_nack(cmd, ERR_UNK); state <= S_RLOAD; end
                     endcase
                 end
-                // ---------------- OSD_WINDOW: 4 sequential ctrl writes ----------------
-                S_WIN: begin
-                    // address and data are driven together each cycle, so the
-                    // ctrl_regs write samples a matched pair.
-                    ctrl_we <= 1'b1;
-                    case (wsel)
-                        2'd0: begin ctrl_addr <= A_X0; ctrl_wdata <= {pbuf[1], pbuf[0]}; end
-                        2'd1: begin ctrl_addr <= A_Y0; ctrl_wdata <= {pbuf[3], pbuf[2]}; end
-                        2'd2: begin ctrl_addr <= A_W;  ctrl_wdata <= {pbuf[5], pbuf[4]}; end
-                        2'd3: begin ctrl_addr <= A_H;  ctrl_wdata <= {pbuf[7], pbuf[6]}; end
-                    endcase
-                    if (wsel == 2'd3) begin build_ack(OP_WIN); state <= S_RLOAD; end
-                    else              wsel <= wsel + 1'b1;
-                end
-                // ---------------- OSD_FB_FILL: write `count` texels ----------------
+                // ---------------- OSD_FB_FILL: write `count` indices ----------------
                 S_FILL: begin
                     if (fill_cnt != 16'd0) begin
                         if (fill_addr < FB_DEPTH) begin
                             fb_we    <= 1'b1;
                             fb_waddr <= fill_addr[FB_AW-1:0];
-                            fb_wdata <= fill_word;
+                            fb_wdata <= fill_idx;
                         end else begin
-                            range_err <= 1'b1;                // out of bounds
+                            range_err <= 1'b1;
                         end
                         fill_addr <= fill_addr + 1'b1;
                         fill_cnt  <= fill_cnt - 1'b1;
@@ -258,12 +243,12 @@ module cmd_parser #(
                         resp_idx <= resp_idx + 1'b1;
                         state    <= S_RWAIT;
                     end else if (resp_idx == resp_total) begin
-                        tx_data  <= resp_crc;        // final CRC byte
+                        tx_data  <= resp_crc;
                         tx_start <= 1'b1;
                         resp_idx <= resp_idx + 1'b1;
                         state    <= S_RWAIT;
                     end else begin
-                        state <= S_SYNC;             // done
+                        state <= S_SYNC;
                     end
                 end
                 S_RWAIT: if (!tx_busy) state <= S_RLOAD;

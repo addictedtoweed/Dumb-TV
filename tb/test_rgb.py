@@ -1,10 +1,9 @@
-"""cocotb testbench for the two-clock parallel-RGB top (top_rgb).
+"""cocotb testbench for the two-clock parallel-RGB top (top_rgb), indexed OSD.
 
-The control plane (UART) runs on sclk; the video pipeline runs on an
-independent pclk. The clocks are deliberately asynchronous so the two clock
-crossings -- the dual-clock OSD framebuffer and the sync2 config bus -- are
-actually exercised. The overlay-upload test proves a serial upload on sclk lands
-correctly in the pixel-domain video output.
+Control plane (UART) runs on sclk; video runs on an asynchronous pclk. The
+overlay-upload test proves a serial upload on sclk (palette + indexed canvas)
+lands correctly in the pixel-domain video output, crossing the dual-clock canvas
+and palette RAMs and the sync2 config bus.
 
 Run with:  make TOPLEVEL=top_rgb MODULE=test_rgb
 """
@@ -15,18 +14,21 @@ import cocotb
 from cocotb.clock import Clock
 from cocotb.triggers import RisingEdge
 
-CLKS_PER_BIT = 8          # in sclk cycles (must match top_rgb default)
+CLKS_PER_BIT = 8
 SCLK_NS = 10
 PCLK_NS = 14              # intentionally async to sclk
 SYNC = 0xA5
 
 H_TOTAL, V_TOTAL = 22, 11
 FRAME_CYCLES = H_TOTAL * V_TOTAL
+ACTIVE_W, ACTIVE_H = 16, 8
 OSD_W, OSD_H = 8, 4
+X_STEP = (OSD_W << 16) // ACTIVE_W
+Y_STEP = (OSD_H << 16) // ACTIVE_H
 
 OP_PING, OP_INFO = 0x01, 0x02
-OP_EN, OP_WIN, OP_ALPHA = 0x10, 0x11, 0x12
-OP_FBW, OP_FBF = 0x20, 0x21
+OP_EN, OP_ALPHA = 0x10, 0x12
+OP_FBW, OP_FBF, OP_PAL = 0x20, 0x21, 0x26
 RSP_ACK, RSP_NACK, RSP_INFO = 0x80, 0x81, 0x82
 
 
@@ -44,20 +46,28 @@ def pattern(x, y):
 
 
 def _w(a):
-    return a + (a >> 7)          # 0..255 alpha -> 0..256 weight
+    return a + (a >> 7)
 
 
 def blend(vid, ov, w):
     return (vid * (256 - w) + ov * w) >> 8
 
 
-def eff_alpha(fb_a, master):
-    return (_w(fb_a) * _w(master)) >> 8
+def eff_alpha(pa, master):
+    return (_w(pa) * _w(master)) >> 8
 
 
-def osd_image(cx, cy):
-    a = 255 if ((cx + cy) & 1) == 0 else 128
-    return (a, (cx * 16) & 0xFF, (cy * 32) & 0xFF, 0xAA)
+def scale(x, y):
+    return ((x * X_STEP) >> 16, (y * Y_STEP) >> 16)
+
+
+def canvas_idx(cx, cy):
+    return (cx + 2 * cy) & 3
+
+PAL = {0: (0, 0, 0, 0),
+       1: (255, 200, 50, 10),
+       2: (200, 20, 200, 100),
+       3: (128, 80, 10, 240)}
 
 
 # ---- sclk-domain (UART) helpers ----
@@ -184,45 +194,43 @@ async def test_get_info(dut):
 
 @cocotb.test()
 async def test_overlay_upload(dut):
-    """Serial upload on sclk must appear blended in the pclk video output,
-    crossing both the dual-clock framebuffer and the sync2 config bus."""
+    """Serial upload on sclk (palette + indexed canvas) must appear upscaled and
+    palette-mapped in the pclk video output, crossing both dual-clock RAMs and
+    the sync2 config bus."""
     start_clocks(dut)
     await reset(dut)
     q = start_monitor(dut)
 
-    await send_frame(dut, OP_FBF, struct.pack("<HH", 0, OSD_W * OSD_H) + bytes([0, 0, 0, 0]))
+    for i, (a, r, g, b) in PAL.items():
+        await send_frame(dut, OP_PAL, bytes([i, a, r, g, b]))
+        cmd, _ = await recv_frame(dut, q); assert cmd == RSP_ACK
+
+    indices = bytes([canvas_idx(a % OSD_W, a // OSD_W) for a in range(OSD_W * OSD_H)])
+    await send_frame(dut, OP_FBW, struct.pack("<H", 0) + indices)
     cmd, _ = await recv_frame(dut, q); assert cmd == RSP_ACK
 
-    texels = bytearray()
-    for cy in range(OSD_H):
-        for cx in range(OSD_W):
-            a, r, g, b = osd_image(cx, cy)
-            texels += bytes([a, r, g, b])
-    await send_frame(dut, OP_FBW, struct.pack("<H", 0) + bytes(texels))
-    cmd, _ = await recv_frame(dut, q); assert cmd == RSP_ACK
-
-    x0, y0, w, h, master = 4, 2, OSD_W, OSD_H, 200
-    await send_frame(dut, OP_WIN, struct.pack("<HHHH", x0, y0, w, h))
-    cmd, _ = await recv_frame(dut, q); assert cmd == RSP_ACK
+    master = 200
     await send_frame(dut, OP_ALPHA, bytes([master]))
     cmd, _ = await recv_frame(dut, q); assert cmd == RSP_ACK
     await send_frame(dut, OP_EN, bytes([1]))
     cmd, _ = await recv_frame(dut, q); assert cmd == RSP_ACK
 
-    # let the config CDC + framebuffer settle into the pixel domain
-    await sclks(dut, 50)
+    await sclks(dut, 50)   # let the config CDC + RAMs settle into pixel domain
 
     frame = await capture_frame(dut)
-    assert frame, "no video captured"
-    inside_seen = False
+    assert frame
+    seen_color = seen_transparent = False
     for (x, y), got in frame.items():
         vr, vg, vb = pattern(x, y)
-        if x0 <= x < x0 + w and y0 <= y < y0 + h:
-            inside_seen = True
-            a, fr, fg, fb_ = osd_image(x - x0, y - y0)
-            ea = eff_alpha(a, master)
-            exp = (blend(vr, fr, ea), blend(vg, fg, ea), blend(vb, fb_, ea))
+        cx, cy = scale(x, y)
+        idx = canvas_idx(cx, cy)
+        if idx != 0:
+            seen_color = True
+            a, r, g, b = PAL[idx]
+            w = eff_alpha(a, master)
+            exp = (blend(vr, r, w), blend(vg, g, w), blend(vb, b, w))
         else:
+            seen_transparent = True
             exp = (vr, vg, vb)
-        assert got == exp, f"pixel ({x},{y}): {got} != {exp}"
-    assert inside_seen, "overlay window never appeared"
+        assert got == exp, f"({x},{y}) idx={idx}: {got} != {exp}"
+    assert seen_color and seen_transparent

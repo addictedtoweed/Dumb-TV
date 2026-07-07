@@ -1,9 +1,9 @@
-"""cocotb testbench for the UART control plane (top_uart).
+"""cocotb testbench for the UART control plane (top_uart), indexed OSD.
 
-Bit-bangs framed protocol bytes into the RX line, decodes the device's TX
-responses, and verifies the full chain: PING/ACK, GET_INFO, bad-CRC NACK, and a
-complete overlay upload (FILL clear -> FB_WRITE image -> WINDOW/ALPHA/ENABLE)
-that must then appear blended in the video output.
+Bit-bangs framed protocol bytes into RX, decodes the device's TX responses, and
+verifies the full chain: PING/ACK, GET_INFO, bad-CRC NACK, out-of-range NACK,
+and a complete overlay upload (PALETTE_SET + FB_WRITE indices + ENABLE) that
+must then appear, upscaled and palette-mapped, in the video output.
 
 Run with:  make TOPLEVEL=top_uart MODULE=test_uart
 """
@@ -14,18 +14,21 @@ import cocotb
 from cocotb.clock import Clock
 from cocotb.triggers import RisingEdge
 
-CLKS_PER_BIT = 8        # must match top_uart default
+CLKS_PER_BIT = 8
 SYNC = 0xA5
 
-# Video / framebuffer geometry (match top_uart + video_timing defaults)
+# geometry (match top_uart + video_timing defaults)
 H_TOTAL, V_TOTAL = 22, 11
 FRAME_CYCLES = H_TOTAL * V_TOTAL
+ACTIVE_W, ACTIVE_H = 16, 8
 OSD_W, OSD_H = 8, 4
+X_STEP = (OSD_W << 16) // ACTIVE_W
+Y_STEP = (OSD_H << 16) // ACTIVE_H
 
-# Opcodes
+# opcodes
 OP_PING, OP_INFO = 0x01, 0x02
-OP_EN, OP_WIN, OP_ALPHA = 0x10, 0x11, 0x12
-OP_FBW, OP_FBF = 0x20, 0x21
+OP_EN, OP_ALPHA = 0x10, 0x12
+OP_FBW, OP_FBF, OP_PAL = 0x20, 0x21, 0x26
 RSP_ACK, RSP_NACK, RSP_INFO = 0x80, 0x81, 0x82
 
 
@@ -44,21 +47,28 @@ def pattern(x, y):
 
 
 def _w(a):
-    return a + (a >> 7)          # 0..255 alpha -> 0..256 weight
+    return a + (a >> 7)
 
 
 def blend(vid, ov, w):
     return (vid * (256 - w) + ov * w) >> 8
 
 
-def eff_alpha(fb_a, master):
-    return (_w(fb_a) * _w(master)) >> 8
+def eff_alpha(pa, master):
+    return (_w(pa) * _w(master)) >> 8
 
 
-def osd_image(cx, cy):
-    """The overlay we upload. Returns (A, R, G, B)."""
-    a = 255 if ((cx + cy) & 1) == 0 else 128
-    return (a, (cx * 16) & 0xFF, (cy * 32) & 0xFF, 0xAA)
+def scale(x, y):
+    return ((x * X_STEP) >> 16, (y * Y_STEP) >> 16)
+
+
+def canvas_idx(cx, cy):
+    return (cx + 2 * cy) & 3          # indices 0..3 (0 = transparent)
+
+PAL = {0: (0, 0, 0, 0),
+       1: (255, 200, 50, 10),
+       2: (200, 20, 200, 100),
+       3: (128, 80, 10, 240)}        # index -> (A, R, G, B)
 
 
 # ---- UART line driving / sampling ----
@@ -68,14 +78,14 @@ async def clks(dut, n):
 
 
 async def send_byte(dut, val):
-    dut.rx.value = 0                       # start bit
+    dut.rx.value = 0
     await clks(dut, CLKS_PER_BIT)
-    for i in range(8):                     # data, LSB first
+    for i in range(8):
         dut.rx.value = (val >> i) & 1
         await clks(dut, CLKS_PER_BIT)
-    dut.rx.value = 1                       # stop bit
+    dut.rx.value = 1
     await clks(dut, CLKS_PER_BIT)
-    await clks(dut, CLKS_PER_BIT)          # inter-byte idle
+    await clks(dut, CLKS_PER_BIT)
 
 
 async def send_frame(dut, cmd, payload=b""):
@@ -85,12 +95,9 @@ async def send_frame(dut, cmd, payload=b""):
 
 
 async def recv_byte(dut):
-    # block until the start bit (TX idles high, falls low to start), then
-    # sample each bit at its center. No timeout: this is driven by a always-on
-    # monitor, so idle gaps between response frames are normal.
     while int(dut.tx.value) == 1:
         await RisingEdge(dut.clk)
-    await clks(dut, CLKS_PER_BIT + CLKS_PER_BIT // 2)   # center of bit 0
+    await clks(dut, CLKS_PER_BIT + CLKS_PER_BIT // 2)
     val = 0
     for i in range(8):
         val |= (int(dut.tx.value) & 1) << i
@@ -99,7 +106,6 @@ async def recv_byte(dut):
 
 
 async def uart_tx_monitor(dut, q):
-    """Continuously decode the device TX line into a byte queue."""
     while True:
         q.append(await recv_byte(dut))
 
@@ -132,7 +138,7 @@ async def recv_frame(dut, q):
 async def reset(dut):
     dut.rx.value = 1
     dut.rst.value = 1
-    await clks(dut, 10)
+    await clks(dut, 20)
     dut.rst.value = 0
     await clks(dut, 5)
 
@@ -177,7 +183,7 @@ async def test_get_info(dut):
     await send_frame(dut, OP_INFO)
     cmd, pl = await recv_frame(dut, q)
     assert cmd == RSP_INFO, hex(cmd)
-    proto, fwma, fwmi, ow, oh, mw, mh, flags = struct.unpack("<BBBHHHHB", pl)
+    _, _, _, ow, oh, _, _, flags = struct.unpack("<BBBHHHHB", pl)
     assert (ow, oh) == (OSD_W, OSD_H), (ow, oh)
 
 
@@ -186,7 +192,6 @@ async def test_bad_crc(dut):
     cocotb.start_soon(Clock(dut.clk, 10, units="ns").start())
     await reset(dut)
     q = start_monitor(dut)
-    # PING frame with deliberately wrong CRC
     for b in [SYNC, OP_PING, 0x00, 0x00, 0xEE]:
         await send_byte(dut, b)
     cmd, pl = await recv_frame(dut, q)
@@ -195,12 +200,12 @@ async def test_bad_crc(dut):
 
 @cocotb.test()
 async def test_fb_range(dut):
-    """FB_WRITE that runs past the framebuffer end returns NACK(range=0x04)."""
+    """FB_WRITE that runs past the canvas end returns NACK(range=0x04)."""
     cocotb.start_soon(Clock(dut.clk, 10, units="ns").start())
     await reset(dut)
     q = start_monitor(dut)
-    # depth = OSD_W*OSD_H = 32; start at 30 with 4 texels -> 32,33 out of range
-    payload = struct.pack("<H", 30) + bytes([0, 0, 0, 0] * 4)
+    # depth = OSD_W*OSD_H = 32; start at 30 with 4 indices -> 32,33 out of range
+    payload = struct.pack("<H", 30) + bytes([0, 0, 0, 0])
     await send_frame(dut, OP_FBW, payload)
     cmd, pl = await recv_frame(dut, q)
     assert cmd == RSP_NACK and pl[0] == OP_FBW and pl[1] == 0x04, (hex(cmd), pl)
@@ -208,43 +213,42 @@ async def test_fb_range(dut):
 
 @cocotb.test()
 async def test_overlay_upload(dut):
-    """Upload an overlay over UART and verify it appears blended in the video."""
+    """Upload a palette + indexed canvas over UART; verify it appears upscaled
+    and palette-mapped in the video output."""
     cocotb.start_soon(Clock(dut.clk, 10, units="ns").start())
     await reset(dut)
     q = start_monitor(dut)
 
-    # clear framebuffer (transparent)
-    await send_frame(dut, OP_FBF, struct.pack("<HH", 0, OSD_W * OSD_H) + bytes([0, 0, 0, 0]))
+    # palette
+    for i, (a, r, g, b) in PAL.items():
+        await send_frame(dut, OP_PAL, bytes([i, a, r, g, b]))
+        cmd, _ = await recv_frame(dut, q); assert cmd == RSP_ACK
+
+    # canvas indices, linear addr = cy*OSD_W + cx
+    indices = bytes([canvas_idx(a % OSD_W, a // OSD_W) for a in range(OSD_W * OSD_H)])
+    await send_frame(dut, OP_FBW, struct.pack("<H", 0) + indices)
     cmd, _ = await recv_frame(dut, q); assert cmd == RSP_ACK
 
-    # upload image (addr 0, then OSD_W*OSD_H texels A,R,G,B)
-    texels = bytearray()
-    for cy in range(OSD_H):
-        for cx in range(OSD_W):
-            a, r, g, b = osd_image(cx, cy)
-            texels += bytes([a, r, g, b])
-    await send_frame(dut, OP_FBW, struct.pack("<H", 0) + bytes(texels))
-    cmd, _ = await recv_frame(dut, q); assert cmd == RSP_ACK
-
-    x0, y0, w, h, master = 4, 2, OSD_W, OSD_H, 200
-    await send_frame(dut, OP_WIN, struct.pack("<HHHH", x0, y0, w, h))
-    cmd, _ = await recv_frame(dut, q); assert cmd == RSP_ACK
+    master = 200
     await send_frame(dut, OP_ALPHA, bytes([master]))
     cmd, _ = await recv_frame(dut, q); assert cmd == RSP_ACK
     await send_frame(dut, OP_EN, bytes([1]))
     cmd, _ = await recv_frame(dut, q); assert cmd == RSP_ACK
 
     frame = await capture_frame(dut)
-    assert frame, "no video captured"
-    inside_seen = False
+    assert frame
+    seen_color = seen_transparent = False
     for (x, y), got in frame.items():
         vr, vg, vb = pattern(x, y)
-        if x0 <= x < x0 + w and y0 <= y < y0 + h:
-            inside_seen = True
-            a, fr, fg, fb_ = osd_image(x - x0, y - y0)
-            ea = eff_alpha(a, master)
-            exp = (blend(vr, fr, ea), blend(vg, fg, ea), blend(vb, fb_, ea))
+        cx, cy = scale(x, y)
+        idx = canvas_idx(cx, cy)
+        if idx != 0:
+            seen_color = True
+            a, r, g, b = PAL[idx]
+            w = eff_alpha(a, master)
+            exp = (blend(vr, r, w), blend(vg, g, w), blend(vb, b, w))
         else:
+            seen_transparent = True
             exp = (vr, vg, vb)
-        assert got == exp, f"pixel ({x},{y}): {got} != {exp}"
-    assert inside_seen, "overlay window never appeared"
+        assert got == exp, f"({x},{y}) idx={idx}: {got} != {exp}"
+    assert seen_color and seen_transparent

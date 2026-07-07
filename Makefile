@@ -14,6 +14,7 @@ VERILOG_SOURCES = \
     rtl/pattern_gen.v \
     rtl/ctrl_regs.v \
     rtl/osd_fb.v \
+    rtl/palette.v \
     rtl/osd_compositor.v \
     rtl/top.v \
     rtl/uart_rx.v \

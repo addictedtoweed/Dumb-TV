@@ -1,51 +1,54 @@
 // osd_compositor.v
 //
-// The heart of the product. Takes the input video stream, recovers the pixel
-// coordinate from de/vsync (exactly as you would after a real DP RX), reads
-// the OSD framebuffer for the matching texel, and alpha-blends it over the
-// live video.
+// Full-screen indexed OSD compositor.
 //
-// LATENCY: two clocks. We pipeline around the 1-clock framebuffer read; we
-// still never buffer a frame, so "DP as fast as possible / zero frame
-// interpolation" stays structural. On hardware, genlock the output clock to
-// the recovered input clock to keep added delay at one line, not one frame.
+//   active (x,y) --upscale--> canvas (cx,cy) --> canvas index --> palette
+//        |                                                            |
+//        video (delayed to match) --------- alpha-blend <------------ RGBA
 //
-//   eff_alpha = (per-pixel fb alpha) * (master osd_alpha) / 256
-//   out       = vid*(256-eff)/256 + fb_rgb*eff/256
+// The low-res canvas (OSD_W x OSD_H, 4-bit indices) is stretched to the full
+// active area (ACTIVE_W x ACTIVE_H) by a nearest-neighbour DDA upscaler, so an
+// integer scale (e.g. 640x360 -> 1920x1080, 3x) is crisp. Each canvas texel is
+// a palette index; index 0 is transparent (video shows through). The fetched
+// palette RGBA is alpha-blended (per-pixel alpha * master fade) into the video.
 //
-// OSD_W/OSD_H are the framebuffer size (powers of two). osd_w/osd_h are the
-// displayed window (<= OSD_W/OSD_H) so you can show part of it / reposition.
+// Latency: 3 clocks (upscale addr -> canvas read -> palette read -> blend). No
+// frame buffering. Both RAMs are dual-clock so the write side (blit / UART) can
+// run on a separate system clock; the compositor reads on the pixel clock.
 
 `default_nettype none
 
 module osd_compositor #(
-    parameter CW    = 12,
-    parameter OSD_W = 8,
-    parameter OSD_H = 4,
-    parameter FB_AW = $clog2(OSD_W) + $clog2(OSD_H)
+    parameter CW       = 12,
+    parameter OSD_W    = 8,      // canvas width  (texels)
+    parameter OSD_H    = 4,      // canvas height
+    parameter ACTIVE_W = 16,     // active video width  (pixels)
+    parameter ACTIVE_H = 8,      // active video height
+    parameter FB_AW    = $clog2(OSD_W*OSD_H)
 )(
-    input  wire        clk,
+    input  wire        clk,      // pixel clock
     input  wire        rst,
-    // Input video stream
+    // input video stream
     input  wire        in_de,
     input  wire        in_hsync,
     input  wire        in_vsync,
     input  wire [7:0]  in_r,
     input  wire [7:0]  in_g,
     input  wire [7:0]  in_b,
-    // OSD config (from ctrl_regs)
+    // config (pixel-domain)
     input  wire        osd_enable,
-    input  wire [15:0] osd_x0,
-    input  wire [15:0] osd_y0,
-    input  wire [15:0] osd_w,
-    input  wire [15:0] osd_h,
-    input  wire [7:0]  osd_alpha,    // master fade, 0..255
-    // OSD framebuffer write port (host / CPU, on its own clock)
-    input  wire           fb_wr_clk,
-    input  wire           fb_we,
+    input  wire [7:0]  osd_alpha,       // master fade
+    // canvas (index) write port
+    input  wire        fb_wr_clk,
+    input  wire        fb_we,
     input  wire [FB_AW-1:0] fb_waddr,
-    input  wire [31:0]    fb_wdata,
-    // Output video stream (registered, +2 clk latency)
+    input  wire [3:0]  fb_wdata,        // 4-bit index
+    // palette write port
+    input  wire        pal_wr_clk,
+    input  wire        pal_we,
+    input  wire [3:0]  pal_waddr,
+    input  wire [31:0] pal_wdata,       // {A,R,G,B}
+    // output video stream (registered, +3 clk)
     output reg         out_de,
     output reg         out_hsync,
     output reg         out_vsync,
@@ -53,84 +56,73 @@ module osd_compositor #(
     output reg [7:0]   out_g,
     output reg [7:0]   out_b
 );
-    localparam LX = $clog2(OSD_W);
-    localparam LY = $clog2(OSD_H);
+    localparam FRAC = 16;
+    localparam CXW  = $clog2(OSD_W);
+    localparam CYW  = $clog2(OSD_H);
+    localparam [31:0] X_STEP = (OSD_W << FRAC) / ACTIVE_W;   // canvas texels / pixel
+    localparam [31:0] Y_STEP = (OSD_H << FRAC) / ACTIVE_H;
 
-    // --- Coordinate recovery from de/vsync (mirrors a real DP RX front-end) ---
-    reg [CW-1:0] x, y;
-    reg          in_de_d;
-
+    // ---- nearest-neighbour upscaler: accumulate the canvas coordinate ----
+    reg [31:0] x_acc, y_acc;
+    reg        in_de_d;
     always @(posedge clk) begin
-        if (rst) begin
-            x       <= {CW{1'b0}};
-            y       <= {CW{1'b0}};
-            in_de_d <= 1'b0;
-        end else begin
+        if (rst) begin x_acc <= 32'd0; y_acc <= 32'd0; in_de_d <= 1'b0; end
+        else begin
             in_de_d <= in_de;
-            x <= in_de ? (x + 1'b1) : {CW{1'b0}};
-            if (in_vsync)               y <= {CW{1'b0}};
-            else if (in_de_d && !in_de) y <= y + 1'b1;
+            x_acc <= in_de ? (x_acc + X_STEP) : 32'd0;      // reset each line
+            if (in_vsync)               y_acc <= 32'd0;      // reset each frame
+            else if (in_de_d && !in_de) y_acc <= y_acc + Y_STEP;   // next line
         end
     end
+    wire [CXW-1:0]   cx    = x_acc[FRAC + CXW - 1 : FRAC];
+    wire [CYW-1:0]   cy    = y_acc[FRAC + CYW - 1 : FRAC];
+    wire [FB_AW-1:0] raddr = cy * OSD_W + cx;
 
-    // --- Stage 0: inside test + framebuffer read address (combinational) ---
-    wire [15:0] x16 = {{(16-CW){1'b0}}, x};
-    wire [15:0] y16 = {{(16-CW){1'b0}}, y};
-
-    wire osd_hit = osd_enable
-               && (x16 >= osd_x0) && (x16 < osd_x0 + osd_w)
-               && (y16 >= osd_y0) && (y16 < osd_y0 + osd_h);
-
-    wire [CW-1:0] dx = x - osd_x0[CW-1:0];
-    wire [CW-1:0] dy = y - osd_y0[CW-1:0];
-    wire [FB_AW-1:0] raddr = {dy[LY-1:0], dx[LX-1:0]};
-
-    wire [31:0] fb_rdata;
+    // ---- canvas (indexed) : read gives index one clock later ----
+    wire [3:0] cidx;
     osd_fb #(.OSD_W(OSD_W), .OSD_H(OSD_H), .AW(FB_AW)) u_fb (
-        .wr_clk(fb_wr_clk),
-        .we(fb_we), .waddr(fb_waddr), .wdata(fb_wdata),
-        .rd_clk(clk),
-        .raddr(raddr), .rdata(fb_rdata)
-    );
+        .wr_clk(fb_wr_clk), .we(fb_we), .waddr(fb_waddr), .wdata(fb_wdata),
+        .rd_clk(clk), .raddr(raddr), .rdata(cidx));
 
-    // --- Stage 1: register video + flags to line up with the fb read data ---
-    reg        de_s1, hs_s1, vs_s1, inside_s1;
-    reg [7:0]  r_s1, g_s1, b_s1;
+    // ---- palette : addressed by the canvas index, RGBA one clock later ----
+    wire [31:0] pcolor;
+    palette u_pal (
+        .wr_clk(pal_wr_clk), .we(pal_we), .waddr(pal_waddr), .wdata(pal_wdata),
+        .rd_clk(clk), .raddr(cidx), .rdata(pcolor));
 
+    // ---- delay video + sync by the two RAM reads, carry the index ----
+    reg de1, hs1, vs1, de2, hs2, vs2;
+    reg [7:0] r1, g1, b1, r2, g2, b2;
+    reg [3:0] idx2;
     always @(posedge clk) begin
         if (rst) begin
-            de_s1 <= 1'b0; hs_s1 <= 1'b0; vs_s1 <= 1'b0; inside_s1 <= 1'b0;
-            r_s1  <= 8'd0; g_s1  <= 8'd0; b_s1 <= 8'd0;
+            de1<=0; hs1<=0; vs1<=0; de2<=0; hs2<=0; vs2<=0;
+            r1<=0; g1<=0; b1<=0; r2<=0; g2<=0; b2<=0; idx2<=0;
         end else begin
-            de_s1     <= in_de;
-            hs_s1     <= in_hsync;
-            vs_s1     <= in_vsync;
-            inside_s1 <= osd_hit;
-            r_s1      <= in_r;
-            g_s1      <= in_g;
-            b_s1      <= in_b;
+            de1<=in_de; hs1<=in_hsync; vs1<=in_vsync; r1<=in_r; g1<=in_g; b1<=in_b;
+            de2<=de1;   hs2<=hs1;      vs2<=vs1;      r2<=r1;   g2<=g1;   b2<=b1;
+            idx2<=cidx;                              // index for the pixel in r2/g2/b2
         end
     end
 
-    // --- Stage 2: blend fb texel over video, register the output ---
-    wire [7:0] fb_a = fb_rdata[31:24];
-    wire [7:0] fb_r = fb_rdata[23:16];
-    wire [7:0] fb_g = fb_rdata[15:8];
-    wire [7:0] fb_b = fb_rdata[7:0];
+    // ---- blend palette color over video (stage aligned with pcolor) ----
+    wire [7:0] pa = pcolor[31:24];
+    wire [7:0] pr = pcolor[23:16];
+    wire [7:0] pg = pcolor[15:8];
+    wire [7:0] pb = pcolor[7:0];
 
-    // Map an 0..255 alpha to an 0..256 weight so 255 means *fully* opaque:
-    // 255 + (255>>7) = 256, 0 + 0 = 0, endpoints exact. Combine per-pixel and
-    // master weights in that 0..256 space, so fb_a=255 & master=255 => exact
-    // overlay (no residual video bleed-through).
-    wire [8:0]  fb_w     = fb_a      + (fb_a      >> 7);   // 0..256
-    wire [8:0]  master_w = osd_alpha + (osd_alpha >> 7);   // 0..256
-    wire [16:0] effp     = fb_w * master_w;                // 0..65536
-    wire [8:0]  eff_w    = effp[16:8];                     // 0..256
+    // index 0 is transparent; else weight = per-pixel alpha * master (0..256)
+    wire [8:0]  pa_w     = pa        + (pa        >> 7);
+    wire [8:0]  master_w = osd_alpha + (osd_alpha >> 7);
+    wire [16:0] effp     = pa_w * master_w;
+    wire [8:0]  eff_full = effp[16:8];
+    wire        show     = osd_enable && (idx2 != 4'd0);
+    wire [8:0]  eff_w    = show ? eff_full : 9'd0;
 
     function [7:0] blend8;
         input [7:0] vid;
         input [7:0] ov;
-        input [8:0] w;                                     // weight, 0..256
+        input [8:0] w;                 // 0..256
         reg [16:0] t;
         begin
             t = vid * (9'd256 - w) + ov * w;
@@ -138,25 +130,16 @@ module osd_compositor #(
         end
     endfunction
 
-    wire [7:0] br = inside_s1 ? blend8(r_s1, fb_r, eff_w) : r_s1;
-    wire [7:0] bg = inside_s1 ? blend8(g_s1, fb_g, eff_w) : g_s1;
-    wire [7:0] bb = inside_s1 ? blend8(b_s1, fb_b, eff_w) : b_s1;
+    wire [7:0] br = blend8(r2, pr, eff_w);
+    wire [7:0] bg = blend8(g2, pg, eff_w);
+    wire [7:0] bb = blend8(b2, pb, eff_w);
 
     always @(posedge clk) begin
         if (rst) begin
-            out_de    <= 1'b0;
-            out_hsync <= 1'b0;
-            out_vsync <= 1'b0;
-            out_r     <= 8'd0;
-            out_g     <= 8'd0;
-            out_b     <= 8'd0;
+            out_de<=0; out_hsync<=0; out_vsync<=0; out_r<=0; out_g<=0; out_b<=0;
         end else begin
-            out_de    <= de_s1;
-            out_hsync <= hs_s1;
-            out_vsync <= vs_s1;
-            out_r     <= br;
-            out_g     <= bg;
-            out_b     <= bb;
+            out_de<=de2; out_hsync<=hs2; out_vsync<=vs2;
+            out_r<=br;   out_g<=bg;      out_b<=bb;
         end
     end
 endmodule

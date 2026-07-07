@@ -1,21 +1,12 @@
 // osd_fb.v
 //
-// The OSD framebuffer: a small dual-clock block-RAM holding the overlay image
-// at low resolution. Each entry is packed {alpha, R, G, B} = 32 bits.
+// The OSD canvas: a small dual-clock block-RAM holding the overlay as 4-bit
+// palette indices (index 0 = transparent). Written on the host/UART clock,
+// read on the pixel clock. OSD_W x OSD_H is the *canvas* resolution; the
+// compositor upscales it to the full active area, so the canvas stays small.
 //
-//   bits [31:24] = alpha (per-pixel)
-//   bits [23:16] = R
-//   bits [15:8]  = G
-//   bits [7:0]   = B
-//
-// DUAL CLOCK: the write port runs on the host/UART clock (wr_clk); the read
-// port runs on the pixel clock (rd_clk). This is the natural block-RAM CDC for
-// the real product, where the pixel clock arrives from the RGB-input bridge
-// (e.g. a Lontium/TFP401 HDMI->RGB chip) and the control plane runs on a
-// separate system clock. Tie wr_clk = rd_clk for single-clock use.
-//
-// OSD_W and OSD_H must be powers of two so the read address is just a
-// concatenation of the within-OSD coordinates.
+// Tie wr_clk = rd_clk for single-clock use. OSD_W/OSD_H need not be powers of
+// two (the compositor computes the linear address).
 
 `default_nettype none
 
@@ -28,13 +19,13 @@ module osd_fb #(
     input  wire           wr_clk,
     input  wire           we,
     input  wire [AW-1:0]  waddr,
-    input  wire [31:0]    wdata,
+    input  wire [3:0]     wdata,      // 4-bit palette index
     // read port (pixel clock domain, synchronous +1 clk)
     input  wire           rd_clk,
     input  wire [AW-1:0]  raddr,
-    output reg  [31:0]    rdata
+    output reg  [3:0]     rdata
 );
-    reg [31:0] mem [0:(OSD_W*OSD_H)-1];
+    reg [3:0] mem [0:(OSD_W*OSD_H)-1];
 
     always @(posedge wr_clk)
         if (we) mem[waddr] <= wdata;
