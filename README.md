@@ -11,14 +11,18 @@ licensed IP, needs no fabric transceivers, and works on a cheap FPGA. Swap the
 bridge to change input standard.
 
 ```
-  bridge chip ──▶ rgb_in ──▶      osd_compositor          ──▶  (output)
-  (HDMI/DVI/DP    sample the   recover (x,y) from de,        to LVDS (1080p
-   → parallel     parallel     alpha-blend OSD over          prototype) or
-   RGB; off-the-  bus (pixel   video, 1-clock latency        panel adapter
-   shelf)         clock)               ▲
-                                  ctrl_regs  ◄── UART control plane
-                                  (OSD pos/size/alpha, glyph blits, picture ctrl)
+  bridge chip ─▶ rgb_in ─▶   osd_compositor    ─▶ parallel ─▶ RGB-to-LVDS ─▶ panel
+  (HDMI/DVI/DP   sample    upscale canvas +        RGB out    serializer
+   → parallel    the RGB   palette-blend OSD                  (off-the-shelf,
+   RGB; off-     bus on    over video                          FPD-Link)
+   the-shelf)    pclk            ▲
+                          ctrl_regs ◄── UART control plane
+                          (enable/alpha, glyph blits, palette, picture ctrl)
 ```
+
+Both the high-speed input (HDMI/DVI/DP → RGB) and output (RGB → LVDS) are
+handled by commodity bridge/serializer chips, so the FPGA is a pure
+**parallel-RGB processor** — cheap, low pin-count, and carrying no licensed IP.
 
 In simulation, `video_timing + pattern_gen` stands in for the bridge's parallel
 output (a gradient test pattern) so the whole pipeline runs with zero hardware.
@@ -36,7 +40,7 @@ board- and vendor-tool independent.
 | `osd_compositor`    | unchanged — your value-add (overlay + low latency)       |
 | `osd_fb`            | dual-clock BRAM: UART-clock write, pixel-clock read      |
 | `cmd_parser`+`ctrl_regs` | UART command parser fed by the Linux host's serial port |
-| top output stream   | LVDS out (1080p prototype) → DP TX → swappable panel adapter |
+| top output stream   | parallel RGB out → off-the-shelf RGB-to-LVDS serializer (FPD-Link / FlatLink, e.g. TI SN75LVDS83B / Lontium) → panel |
 
 **Canonical input = parallel RGB.** Rather than receive HDMI/DVI/DP in the FPGA
 fabric (transceivers + licensed IP), a commodity bridge chip does that and hands
@@ -140,6 +144,7 @@ OSD pixel color/alpha come from the framebuffer, not registers.
 5. **OSD upscaler** — render OSD at e.g. 720p and bilinear-upscale to active,
    so the framebuffer stays small but the overlay looks crisp at 1080p.
 6. **Real I/O** — feed `rgb_in` from a real bridge chip (Lontium/TFP401) and
-   drive an LVDS/DP output, on the chosen prototype board.
+   drive the parallel-RGB output into an RGB-to-LVDS serializer, on the chosen
+   prototype board. (No RTL change — the FPGA is parallel-RGB in and out.)
 
 See `docs/uart-protocol.md` for the host (Pi) serial protocol.
