@@ -51,6 +51,32 @@ compositor / OSD / control logic in Verilator with zero hardware**, then only
 touch a board to validate the bridge + output plumbing. Everything here is
 board- and vendor-tool independent.
 
+## Open and hackable by design
+
+This is a **dumb TV**: no smart-TV OS, no cloud, no telemetry, no app. The screen
+does exactly what you tell it — and you tell it over a **plain serial port**.
+
+- **The OSD and all display control are just documented UART commands.** Overlay
+  graphics, palette, enable/fade — and (planned) volume, picture adjustment, and
+  a guaranteed *zero frame interpolation* mode — are a small, open, framed binary
+  protocol ([`docs/uart-protocol.md`](docs/uart-protocol.md)). Anything with a
+  UART drives it: a Raspberry Pi, a microcontroller, a laptop on a USB-serial
+  cable. No drivers, no SDK, no signing.
+- **You bring the brains.** The control plane is deliberately dumb and external,
+  so *your* device owns the picture — script it, automate it, wire it into your
+  own software. A few lines of Python (included in the protocol doc) put a logo
+  or a HUD on the screen.
+- **The whole design is open.** The RTL is redistributable and the published
+  bitstream carries **no licensed IP** (the proprietary video standards live in
+  the commodity bridge/serializer chips, not the FPGA). Contributors can add
+  protocol commands, swap the input bridge, output serializer, or canvas memory
+  backend (`CANVAS=bram|psram`), and rebuild — everything is board- and
+  vendor-tool independent, and testable in simulation with no hardware.
+
+The privacy pitch isn't a promise you have to trust — it's structural: a display
+whose only control surface is an open serial protocol you can read, script, and
+audit.
+
 ## What maps to what in the real product
 
 | Scaffold block      | Real product                                              |
