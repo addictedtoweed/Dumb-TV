@@ -100,13 +100,18 @@ Under WSL, `./sim.sh` activates the cocotb venv and uses a space-free build dir
 also writes a VCD.)
 
 - **Compositor** — `test_passthrough` (OSD off ⇒ output equals input) and
-  `test_framebuffer_overlay` (framebuffer texel blended inside the window).
+  `test_indexed_overlay` (upscaled canvas index → palette color blended over
+  video; index 0 transparent).
 - **UART** — `test_ping`/`test_get_info` (framing + responses), `test_bad_crc`
-  (corrupt frame ⇒ NACK), `test_overlay_upload` (serial FILL→FB_WRITE→
-  WINDOW/ALPHA/ENABLE puts the uploaded overlay on the video output).
+  (corrupt frame ⇒ NACK), `test_fb_range` (out-of-range write ⇒ NACK),
+  `test_overlay_upload` (serial PALETTE_SET + FB_WRITE indices + ENABLE puts the
+  upscaled, palette-mapped overlay on the video output).
 - **RGB (two-clock)** — same overlay upload but with UART on `sclk` and video on
-  an asynchronous `pclk`, so the dual-clock framebuffer and the `sync2` config
-  crossing are actually exercised.
+  an asynchronous `pclk`, so the dual-clock canvas + palette RAMs and the `sync2`
+  config crossing are actually exercised.
+
+Both canvas backends pass: run any suite with `CANVAS=psram` to test against the
+external-memory build instead of BRAM.
 
 All tests compare against a Python model of the *exact* gradient/blend/CRC math,
 so any logic change that breaks a pixel or a byte fails the build.
@@ -118,47 +123,56 @@ The timing is parameterized. For real 1080p60 timing, override
 H_BP=148, V_ACTIVE=1080, V_FP=4, V_SYNC=5, V_BP=36`). Keep the tiny defaults
 for fast cocotb iteration; only synthesize at full size.
 
-## OSD framebuffer
+## OSD canvas (indexed) + palette
 
-The OSD is now a small block-RAM framebuffer (`osd_fb.v`), `OSD_W` x `OSD_H`
-texels (powers of two), each packed `{alpha[31:24], R[23:16], G[15:8], B[7:0]}`.
-The host loads it through the `fb_we / fb_waddr / fb_wdata` port (in sim, cocotb
-does). The compositor reads the matching texel and blends:
+The OSD is a full-screen indexed plane:
+
+- **Canvas** (`osd_fb_*.v`) — `OSD_W × OSD_H` **4-bit palette indices**, written
+  by the host over `fb_we/fb_waddr/fb_wdata` (in sim, cocotb). It's a *low-res*
+  plane the compositor stretches to the whole active area (nearest-neighbour
+  DDA upscaler), so a small canvas covers the full screen. Lives in BRAM or
+  external PSRAM per the `CANVAS` build (see above).
+- **Palette** (`palette.v`) — 16 entries of `{A,R,G,B}`, written over
+  `pal_we/pal_waddr/pal_wdata`. **Index 0 is transparent** (video shows
+  through). 15 usable colors — plenty for an OSD, and re-palettable without
+  re-uploading the canvas.
+
+Per output pixel the compositor upscales `(x,y)→(cx,cy)`, reads the canvas
+index, looks up the palette, and blends:
 
 ```
-  eff_alpha = fb_alpha * OSD_ALPHA / 256        (per-pixel * master fade)
-  out       = vid*(256-eff)/256 + fb_rgb*eff/256
+  eff = palette_alpha * OSD_ALPHA / 256          (0..256 weight; 255 => exact)
+  out = vid*(256-eff)/256 + palette_rgb*eff/256   (index 0 => passthrough)
 ```
 
-This makes the OSD fully customizable (text, menus, logos) — render the image
-on the host, push it over the framebuffer port. Compositor latency is now two
-clocks (pipelined around the 1-clock RAM read); still no frame buffering.
+Latency is 3 clocks (upscale → canvas read → palette read → blend); no frame
+buffering.
 
 ## Control register map (`ctrl_regs.v`)
 
-| Addr | Name        | Notes                                  |
-|------|-------------|----------------------------------------|
-| 0    | OSD_ENABLE  | bit0                                   |
-| 1    | OSD_X0      | window left (on-screen position)       |
-| 2    | OSD_Y0      | window top                             |
-| 3    | OSD_W       | window width  (<= framebuffer OSD_W)   |
-| 4    | OSD_H       | window height (<= framebuffer OSD_H)   |
-| 5    | OSD_ALPHA   | master fade, 0=off .. 255=full         |
+| Addr | Name        | Notes                          |
+|------|-------------|--------------------------------|
+| 0    | OSD_ENABLE  | bit0                           |
+| 1    | OSD_ALPHA   | master fade, 0=off .. 255=full |
 
-OSD pixel color/alpha come from the framebuffer, not registers.
+The OSD is full-screen, so there is no window position/size. Pixel color/alpha
+come from the canvas index + palette, not registers.
 
 ## Next steps (in rough order)
 
-1. ~~**Framebuffer OSD**~~ — done (`osd_fb.v`).
-2. ~~**UART front-end**~~ — done (`uart_rx.v`, `uart_tx.v`, `cmd_parser.v`,
-   `top_uart.v`); implements `docs/uart-protocol.md`.
+1. ~~**Framebuffer OSD**~~ — done.
+2. ~~**UART front-end**~~ — done (`uart_rx/tx.v`, `cmd_parser.v`, `top_uart.v`).
 3. ~~**Parallel-RGB front-end + two clock domains**~~ — done (`rgb_in.v`,
-   `sync2.v`, dual-clock `osd_fb.v`, `top_rgb.v`).
-4. **Picture controls** — add BRIGHTNESS/CONTRAST registers + a pixel-math stage
-   in the compositor (the protocol already reserves the opcodes).
-5. **OSD upscaler** — render OSD at e.g. 720p and bilinear-upscale to active,
-   so the framebuffer stays small but the overlay looks crisp at 1080p.
-6. **Real I/O** — feed `rgb_in` from a real bridge chip (Lontium/TFP401) and
+   `sync2.v`, dual-clock RAMs, `top_rgb.v`).
+4. ~~**Full-screen indexed OSD + palette + upscaler**~~ — done (`osd_fb_*.v`,
+   `palette.v`, `osd_compositor.v`).
+5. ~~**Canvas storage seam (BRAM or external PSRAM)**~~ — done (`CANVAS=`).
+6. **Glyph subsystem (stage 2)** — glyph store + blit engine + double-buffered
+   canvas + `CLEAR`/`FLIP` + glyph/text/fill commands (see `docs/uart-protocol.md`
+   §7). Lands the flicker-free draw cycle and the config-CDC-at-vblank fix.
+7. **Picture controls** — BRIGHTNESS/CONTRAST registers + a pixel-math stage
+   (opcodes reserved).
+8. **Real I/O** — feed `rgb_in` from a real bridge chip (Lontium/TFP401) and
    drive the parallel-RGB output into an RGB-to-LVDS serializer, on the chosen
    prototype board. (No RTL change — the FPGA is parallel-RGB in and out.)
 

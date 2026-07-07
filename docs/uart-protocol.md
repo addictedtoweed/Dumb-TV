@@ -1,15 +1,20 @@
 # Dumb-TV UART control protocol
 
-This is the serial command interface between a host (your Raspberry Pi / Linux
-box) and the Dumb-TV FPGA. With it you can:
+Serial command interface between a host (Raspberry Pi / Linux box) and the
+Dumb-TV FPGA. With it you can:
 
-- turn the on-screen overlay on/off, move/resize it, fade it
-- **upload custom overlay graphics** into the OSD framebuffer
-- (reserved) adjust picture controls like brightness/contrast
+- turn the on-screen overlay on/off and fade it
+- set the 16-color **palette**
+- **upload the overlay** as 4-bit palette indices into the OSD canvas
+- (planned) blit glyphs / text / rectangles and double-buffer — see §7
 
-It is a small **binary framed** protocol — deliberately tiny so it's quick to
-implement and robust enough to stream image data. A complete, copy-pasteable
-Python implementation is at the bottom.
+The OSD is a **full-screen indexed plane**: a low-resolution canvas of 4-bit
+palette indices that the FPGA stretches (nearest-neighbour) to the whole active
+picture. Index 0 is transparent, so wherever you don't draw, the video shows
+through — the overlay is borderless, not a box.
+
+It is a small **binary framed** protocol. A copy-pasteable Python implementation
+is at the bottom.
 
 ---
 
@@ -19,7 +24,7 @@ Python implementation is at the bottom.
 |-----------|---------------------------------------------------|
 | Levels    | 3.3 V TTL UART (do **not** connect RS-232 levels) |
 | Default baud | 115200                                         |
-| Fast baud | up to 1000000 (recommended for image uploads)     |
+| Fast baud | up to 1000000 (recommended for bulk uploads)      |
 | Format    | 8 data bits, no parity, 1 stop bit (8N1)          |
 | Flow ctrl | none (software ACK, see below)                    |
 | Pins      | TX, RX, GND. Cross TX↔RX. (Pi GPIO14/15 = `/dev/serial0`) |
@@ -39,40 +44,46 @@ Every message in both directions is one frame:
    sync   1B      16-bit LE         LEN bytes      1B
 ```
 
-- `0xA5` — start-of-frame sync byte. If the parser is mid-resync it discards
-  bytes until it sees this.
+- `0xA5` — start-of-frame sync byte; the parser resyncs by discarding bytes
+  until it sees one.
 - `CMD` — command/response opcode (tables below).
-- `LEN` — number of payload bytes (0..65535), little-endian.
-- `PAYLOAD` — `LEN` bytes.
-- `CRC8` — checksum over **CMD, LEN_LO, LEN_HI and PAYLOAD** (not the sync byte).
+- `LEN` — payload length in bytes (0..65535), little-endian.
+- `CRC8` — over **CMD, LEN_LO, LEN_HI and PAYLOAD** (not the sync byte).
   Polynomial `0x07`, init `0x00` (CRC-8/SMBUS). 8-line implementation below.
 
-If a frame fails CRC or has an unknown opcode, the device replies `NACK`.
+A frame that fails CRC, has a bad length, an unknown opcode, or an out-of-range
+address gets a `NACK` with the reason code.
 
 ---
 
 ## 3. Commands (host → device)
 
-| Opcode | Name           | Payload                                  |
-|--------|----------------|------------------------------------------|
-| `0x01` | PING           | (none) → device replies `ACK`            |
-| `0x02` | GET_INFO       | (none) → device replies `INFO`           |
-| `0x10` | OSD_ENABLE     | `en`(1): 0=off, 1=on                      |
-| `0x11` | OSD_WINDOW     | `x0`(2) `y0`(2) `w`(2) `h`(2)             |
-| `0x12` | OSD_ALPHA      | `alpha`(1): 0=transparent .. 255=full     |
-| `0x20` | OSD_FB_WRITE   | `addr`(2) then N×`{A,R,G,B}` texels       |
-| `0x21` | OSD_FB_FILL    | `addr`(2) `count`(2) `A`(1)`R`(1)`G`(1)`B`(1) |
-| `0x30` | BRIGHTNESS *(reserved)* | `level`(1)                      |
-| `0x31` | CONTRAST *(reserved)*   | `level`(1)                      |
+| Opcode | Name         | Payload                                               |
+|--------|--------------|-------------------------------------------------------|
+| `0x01` | PING         | (none) → `ACK`                                        |
+| `0x02` | GET_INFO     | (none) → `INFO`                                       |
+| `0x10` | OSD_ENABLE   | `en`(1): 0=off, 1=on                                  |
+| `0x12` | OSD_ALPHA    | `alpha`(1): master fade, 0=off .. 255=full            |
+| `0x20` | OSD_FB_WRITE | `addr`(2) + N `index` bytes (low nibble = 4-bit index)|
+| `0x26` | PALETTE_SET  | `index`(1) `A`(1) `R`(1) `G`(1) `B`(1)                |
+| `0x21` | OSD_FB_FILL  | `addr`(2) `count`(2) `index`(1)                       |
+| `0x30` | BRIGHTNESS *(reserved)* | `level`(1)                                 |
+| `0x31` | CONTRAST *(reserved)*   | `level`(1)                                 |
 
 ### Field meanings
 
-- **OSD_WINDOW** places the overlay on screen: `(x0,y0)` is the top-left pixel
-  on the output, `(w,h)` how many framebuffer texels to show. `w`/`h` must be
-  ≤ the framebuffer size reported by `GET_INFO`.
-- **OSD_ALPHA** is a *master fade* multiplied with each texel's own alpha, so
-  you can fade the whole overlay in/out without re-uploading it.
-- **OSD_FB_WRITE / OSD_FB_FILL** write into the OSD framebuffer (see §5).
+- **OSD_ENABLE** gates the whole overlay. **OSD_ALPHA** is a master fade
+  multiplied with each pixel's palette alpha — fade the overlay in/out without
+  re-uploading.
+- **PALETTE_SET** sets one of the 16 palette entries to a color + alpha. By
+  convention **index 0 is transparent** (leave it, or set its alpha to 0), so
+  entries 1..15 are your usable colors.
+- **OSD_FB_WRITE** streams canvas pixels as 4-bit palette indices, one index per
+  byte (low nibble), starting at linear `addr`. **OSD_FB_FILL** writes the same
+  index `count` times — handy to clear (`fill addr=0 count=osd_w*osd_h index=0`).
+
+There is no window/position command: the canvas always covers the full screen,
+stretched. Position elements by where you draw them in the canvas.
 
 ---
 
@@ -80,54 +91,49 @@ If a frame fails CRC or has an unknown opcode, the device replies `NACK`.
 
 | Opcode | Name | Payload                                                       |
 |--------|------|--------------------------------------------------------------|
-| `0x80` | ACK  | `cmd`(1) — the command being acknowledged                    |
+| `0x80` | ACK  | `cmd`(1) — the command acknowledged                          |
 | `0x81` | NACK | `cmd`(1) `err`(1)                                            |
 | `0x82` | INFO | `proto`(1) `fw_major`(1) `fw_minor`(1) `osd_w`(2) `osd_h`(2) `max_w`(2) `max_h`(2) `flags`(1) |
 
 Error codes (`NACK.err`): `0x01` bad CRC, `0x02` bad length, `0x03` unknown
-command, `0x04` value/address out of range, `0x05` busy.
+command, `0x04` address out of range.
 
-The device sends an `ACK` (or `NACK`) for **every** command. Wait for it before
-sending the next frame — that's your flow control, and it matters when streaming
-an upload so you don't overrun the receive buffer.
+The device sends `ACK`/`NACK` for **every** command — wait for it before sending
+the next frame. That's your flow control (and, for streaming uploads, what keeps
+you from overrunning the receive buffer).
 
-`INFO.osd_w`/`osd_h` are the framebuffer dimensions (powers of two). Read these
-at startup instead of hard-coding — they will grow as the product evolves
-(the simulation scaffold ships tiny, e.g. 8×4).
+`INFO.osd_w`/`osd_h` are the **canvas** dimensions (the low-res plane, e.g.
+640×360 on hardware, 8×4 in the sim scaffold). Read them at startup rather than
+hard-coding — they can change per build. `max_w`/`max_h` are the target display
+size (1920×1080).
 
 ---
 
-## 5. Uploading overlay graphics
+## 5. Drawing the overlay
 
-The OSD framebuffer is `osd_w × osd_h` texels. Each texel is **4 bytes in
-`A, R, G, B` order** (alpha first). Texels are linearly addressed:
+The canvas is `osd_w × osd_h` **4-bit palette indices**, addressed linearly:
 
 ```
-    addr = y * osd_w + x          # x = column 0..osd_w-1, y = row 0..osd_h-1
+    addr = y * osd_w + x        # x = 0..osd_w-1, y = 0..osd_h-1
 ```
 
-To upload an image:
+Typical sequence:
 
 1. `GET_INFO` → learn `osd_w`, `osd_h`.
-2. Render/resize your overlay to exactly `osd_w × osd_h`, RGBA.
-3. Send it with one or more `OSD_FB_WRITE` frames. `addr` is the first texel;
-   the payload then carries consecutive texels. **Chunk** large images into
-   several frames (e.g. 256 texels per frame) and wait for each `ACK` — this
-   keeps frames small and flow-controlled.
-4. `OSD_WINDOW` to position it, `OSD_ALPHA 255`, `OSD_ENABLE 1`.
+2. `PALETTE_SET` for each color you use (index 1..15; index 0 = transparent).
+3. `OSD_FB_WRITE` the index map (chunk large canvases into several frames, wait
+   for each `ACK`).
+4. `OSD_ALPHA 255`, `OSD_ENABLE 1`.
 
-Alpha is per-texel: `A=0` is fully transparent (video shows through), `A=255`
-fully opaque. That's how you get non-rectangular logos/text — make the
-background texels transparent.
-
-`OSD_FB_FILL` writes the same texel `count` times starting at `addr` — handy to
-clear the framebuffer (`fill addr=0 count=osd_w*osd_h A=0`) before drawing.
+Because the plane is transparent wherever an index is 0, elements can sit
+anywhere on screen with no surrounding box; the video shows through everywhere
+else.
 
 ### Latency note
 
-OSD updates are intentionally allowed to be slow; the live video path is not
-affected by uploads. Upload whenever you like — even mid-frame — and the change
-appears on the next frames. The video itself passes through at full speed.
+OSD updates are decoupled from the live video: the picture passes through at
+full speed regardless. (Flicker-free redraw via a back buffer + FLIP is planned;
+see §7.)
 
 ---
 
@@ -139,8 +145,7 @@ from PIL import Image          # pip install pyserial pillow
 
 SYNC = 0xA5
 
-# --- CRC-8/SMBUS (poly 0x07, init 0x00) ---
-def crc8(data: bytes) -> int:
+def crc8(data: bytes) -> int:                       # CRC-8/SMBUS, poly 0x07
     c = 0
     for byte in data:
         c ^= byte
@@ -152,12 +157,11 @@ class DumbTV:
     def __init__(self, port="/dev/serial0", baud=115200):
         self.s = serial.Serial(port, baud, timeout=1.0)
 
-    def _send(self, cmd: int, payload: bytes = b"") -> None:
+    def _send(self, cmd, payload=b""):
         body = bytes([cmd]) + struct.pack("<H", len(payload)) + payload
         self.s.write(bytes([SYNC]) + body + bytes([crc8(body)]))
 
     def _read_frame(self):
-        # find sync
         while True:
             b = self.s.read(1)
             if not b:
@@ -172,10 +176,10 @@ class DumbTV:
             raise IOError("bad CRC in response")
         return cmd, payload
 
-    def _cmd(self, cmd: int, payload: bytes = b""):
+    def _cmd(self, cmd, payload=b""):
         self._send(cmd, payload)
         rcmd, rpl = self._read_frame()
-        if rcmd == 0x81:                       # NACK
+        if rcmd == 0x81:                            # NACK
             raise IOError(f"NACK cmd=0x{rpl[0]:02x} err=0x{rpl[1]:02x}")
         return rcmd, rpl
 
@@ -186,56 +190,77 @@ class DumbTV:
         return dict(proto=proto, fw=(fwma, fwmi), osd_w=ow, osd_h=oh,
                     max_w=mw, max_h=mh, flags=flags)
 
-    def enable(self, on):        self._cmd(0x10, bytes([1 if on else 0]))
-    def window(self, x0, y0, w, h):
-        self._cmd(0x11, struct.pack("<HHHH", x0, y0, w, h))
-    def alpha(self, a):          self._cmd(0x12, bytes([a]))
+    def enable(self, on):     self._cmd(0x10, bytes([1 if on else 0]))
+    def alpha(self, a):       self._cmd(0x12, bytes([a]))
+    def palette(self, i, a, r, g, b):
+        self._cmd(0x26, bytes([i, a, r, g, b]))
+    def fill(self, addr, count, index):
+        self._cmd(0x21, struct.pack("<HH", addr, count) + bytes([index]))
 
-    def fill(self, addr, count, a, r, g, b):
-        self._cmd(0x21, struct.pack("<HH", addr, count) + bytes([a, r, g, b]))
+    def write_indices(self, indices, addr=0, chunk=512):
+        for i in range(0, len(indices), chunk):
+            self._cmd(0x20, struct.pack("<H", addr + i) + bytes(indices[i:i+chunk]))
 
-    def upload_image(self, path, osd_w, osd_h, chunk=256):
-        img = Image.open(path).convert("RGBA").resize((osd_w, osd_h))
-        # build A,R,G,B texel stream
-        texels = bytearray()
-        for r, g, b, a in img.getdata():
-            texels += bytes([a, r, g, b])
-        for i in range(0, osd_w * osd_h, chunk):
-            addr = i
-            data = texels[i*4:(i+chunk)*4]
-            self._cmd(0x20, struct.pack("<H", addr) + data)
+    def upload_image(self, path, osd_w, osd_h):
+        # quantize to <=15 colors, keep index 0 transparent
+        img = Image.open(path).convert("RGB").resize((osd_w, osd_h)).quantize(colors=15)
+        pal = img.getpalette()                      # [r,g,b, r,g,b, ...]
+        self.palette(0, 0, 0, 0, 0)                 # index 0 = transparent
+        for k in range(15):
+            r, g, b = pal[k*3:k*3+3]
+            self.palette(k + 1, 255, r, g, b)       # entries 1..15 opaque
+        idx = bytes((p + 1) for p in img.getdata()) # shift 0..14 -> 1..15
+        self.write_indices(idx, 0)
 
 # --- example session ---
 tv = DumbTV("/dev/serial0", 115200)
 nfo = tv.info()
-print("framebuffer:", nfo["osd_w"], "x", nfo["osd_h"])
-tv.fill(0, nfo["osd_w"] * nfo["osd_h"], 0, 0, 0, 0)   # clear (transparent)
+print("canvas:", nfo["osd_w"], "x", nfo["osd_h"])
+tv.fill(0, nfo["osd_w"] * nfo["osd_h"], 0)          # clear to transparent
 tv.upload_image("logo.png", nfo["osd_w"], nfo["osd_h"])
-tv.window(x0=32, y0=32, w=nfo["osd_w"], h=nfo["osd_h"])
 tv.alpha(255)
 tv.enable(True)
 ```
 
 ---
 
-## 7. Quick reference card
+## 7. Planned (stage 2) — not yet implemented
+
+The next firmware adds a glyph/blit toolkit and double-buffering. Opcodes are
+reserved here so host code can be written against the roadmap:
+
+| Opcode | Name        | Payload (planned)                        |
+|--------|-------------|------------------------------------------|
+| `0x22` | GLYPH_UPLOAD| `slot`(1) + 4bpp bitmap                   |
+| `0x23` | GLYPH_BLIT  | `slot`(1) `x`(2) `y`(2) `pal`(1)          |
+| `0x24` | DRAW_TEXT   | `x`(2) `y`(2) `pal`(1) + ASCII bytes      |
+| `0x25` | FILL_RECT   | `x`(2) `y`(2) `w`(2) `h`(2) `index`(1)    |
+| `0x27` | CLEAR       | (optional index) — wipe the back buffer  |
+| `0x28` | FLIP        | (none) — swap buffers at VSync, ACK after |
+
+With double-buffering the flicker-free idiom becomes: `CLEAR` → draw → `FLIP`.
+
+---
+
+## 8. Quick reference card
 
 ```
 FRAME:  A5 | CMD | LEN_LO LEN_HI | PAYLOAD... | CRC8(CMD..PAYLOAD)
-INT:    little-endian      TEXEL: A R G B (4B)     ADDR: y*osd_w + x
+INT: little-endian    PIXEL: 4-bit palette index    ADDR: y*osd_w + x
 
 0x01 PING            -> ACK
 0x02 GET_INFO        -> INFO(proto,fw,osd_w,osd_h,max_w,max_h,flags)
 0x10 OSD_ENABLE  en
-0x11 OSD_WINDOW  x0 y0 w h
 0x12 OSD_ALPHA   a
-0x20 OSD_FB_WRITE addr texels...
-0x21 OSD_FB_FILL  addr count A R G B
+0x26 PALETTE_SET index A R G B      (index 0 = transparent)
+0x20 OSD_FB_WRITE addr indices...   (one 4-bit index per byte)
+0x21 OSD_FB_FILL  addr count index
 
-0x80 ACK  cmd          0x81 NACK cmd err          0x82 INFO ...
-err: 01 crc  02 len  03 unknown  04 range  05 busy
+0x80 ACK cmd     0x81 NACK cmd err     0x82 INFO ...
+err: 01 crc  02 len  03 unknown  04 range
 ```
 
-*This document is the external contract. Internally the FPGA's UART parser maps
-these commands onto the `ctrl_regs` register writes and the `osd_fb` framebuffer
-write port described in the RTL — see `rtl/`.*
+*External contract. Internally the parser maps these onto `ctrl_regs`, the
+`osd_fb` canvas write port (4-bit indices), and the `palette` write port — see
+`rtl/`. The canvas lives in BRAM or external PSRAM depending on the build
+(`CANVAS=bram|psram`), transparently to this protocol.*
