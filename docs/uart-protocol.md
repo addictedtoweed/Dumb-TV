@@ -74,9 +74,9 @@ address gets a `NACK` with the reason code.
 | `0x25` | FILL_RECT    | `x`(2) `y`(2) `w`(2) `h`(2) `index`(1)                |
 | `0x27` | CLEAR        | *(optional `index`(1); default 0)* — wipe back buffer |
 | `0x28` | FLIP         | *(none)* — swap buffers at VSync; ACK **after** swap  |
-| `0x40` | INPUT_SELECT | `sel`(1) — set the input mux select (0..15)           |
-| `0x30` | BRIGHTNESS *(reserved)* | `level`(1)                                 |
-| `0x31` | CONTRAST *(reserved)*   | `level`(1)                                 |
+| `0x30` | BRIGHTNESS    | `level`(1) — picture brightness, 128 = neutral      |
+| `0x31` | CONTRAST      | `level`(1) — picture contrast, 128 = unity gain     |
+| `0x40` | INPUT_SELECT  | `sel`(1) — set the input mux select (0..15)         |
 
 ### Field meanings
 
@@ -265,6 +265,8 @@ class DumbTV:
         self._cmd(0x25, struct.pack("<HHHH", x, y, w, h) + bytes([index]))
     def input_select(self, sel):
         self._cmd(0x40, bytes([sel]))
+    def brightness(self, level):   self._cmd(0x30, bytes([level]))   # 128 = neutral
+    def contrast(self, level):     self._cmd(0x31, bytes([level]))   # 128 = unity
 
     def write_indices(self, indices, addr=0, chunk=512):
         for i in range(0, len(indices), chunk):
@@ -296,15 +298,11 @@ tv.flip()                                           # show it (swaps at VSync)
 
 ## 7. Planned (stage 2) — not yet implemented
 
-The full OSD command set is implemented. Only the picture-control opcodes remain
-reserved:
-
-| Opcode | Name       | Payload (reserved)  |
-|--------|------------|---------------------|
-| `0x30` | BRIGHTNESS | `level`(1)          |
-| `0x31` | CONTRAST   | `level`(1)          |
-
-These need a pixel-math stage in the compositor (planned).
+The full command set is implemented — OSD, double-buffering, glyphs/text/rects,
+picture controls, and the input mux. `BRIGHTNESS`/`CONTRAST` apply a pixel-math
+stage to the **video** before the OSD is blended on top (so menus stay a fixed
+brightness): `out = clamp((v - 128) * contrast / 128 + brightness)`, neutral at
+`brightness = 128, contrast = 128`.
 
 ---
 
@@ -327,6 +325,8 @@ INT: little-endian    PIXEL: 4-bit palette index    ADDR: y*osd_w + x
 0x25 FILL_RECT    x y w h index                                  -> back buffer
 0x27 CLEAR        [index]           (wipe back buffer)
 0x28 FLIP                           (swap at VSync; ACK after swap)
+0x30 BRIGHTNESS   level             (128 = neutral)
+0x31 CONTRAST     level             (128 = unity)
 0x40 INPUT_SELECT sel               (set input mux 0..15)
 
 0x80 ACK cmd     0x81 NACK cmd err     0x82 INFO ...

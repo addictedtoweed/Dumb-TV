@@ -38,6 +38,8 @@ module osd_compositor #(
     // config (pixel-domain)
     input  wire        osd_enable,
     input  wire [7:0]  osd_alpha,       // master fade
+    input  wire [7:0]  brightness,      // picture brightness (128 = neutral)
+    input  wire [7:0]  contrast,        // picture contrast   (128 = unity)
     // canvas (index) write port
     input  wire        fb_wr_clk,
     input  wire        fb_we,
@@ -172,9 +174,32 @@ module osd_compositor #(
         end
     endfunction
 
-    wire [7:0] br = blend8(r2, pr, eff_w);
-    wire [7:0] bg = blend8(g2, pg, eff_w);
-    wire [7:0] bb = blend8(b2, pb, eff_w);
+    // Picture controls, applied to the video before the OSD is blended on top
+    // (so menus stay a fixed brightness). out = clamp( (v-128)*contrast/128
+    // + brightness ); neutral at brightness=128, contrast=128 (=> out = v).
+    function [7:0] pixmath;
+        input [7:0] v;
+        input [7:0] bright;
+        input [7:0] con;
+        reg signed [9:0]  vc;
+        reg signed [19:0] prod, sum;
+        begin
+            vc   = $signed({2'b00, v}) - 10'sd128;
+            prod = vc * $signed({2'b00, con});
+            sum  = (prod >>> 7) + $signed({2'b00, bright});
+            if (sum < 0)         pixmath = 8'd0;
+            else if (sum > 255)  pixmath = 8'd255;
+            else                 pixmath = sum[7:0];
+        end
+    endfunction
+
+    wire [7:0] vr = pixmath(r2, brightness, contrast);
+    wire [7:0] vg = pixmath(g2, brightness, contrast);
+    wire [7:0] vb2 = pixmath(b2, brightness, contrast);
+
+    wire [7:0] br = blend8(vr, pr, eff_w);
+    wire [7:0] bg = blend8(vg, pg, eff_w);
+    wire [7:0] bb = blend8(vb2, pb, eff_w);
 
     always @(posedge clk) begin
         if (rst) begin

@@ -80,18 +80,22 @@ module top_rgb #(
         .flip_req(flip_req), .flip_done(flip_done));
 
     wire        osd_enable;
-    wire [7:0]  osd_alpha;
+    wire [7:0]  osd_alpha, brightness, contrast;
     ctrl_regs u_ctrl (
         .clk(sclk), .rst(rst),
         .addr(ctrl_addr), .wdata(ctrl_wdata), .we(ctrl_we),
-        .osd_enable(osd_enable), .osd_alpha(osd_alpha), .mux_sel(mux_sel));
+        .osd_enable(osd_enable), .osd_alpha(osd_alpha), .mux_sel(mux_sel),
+        .brightness(brightness), .contrast(contrast));
 
     // ---------------- CDC: config sclk -> pclk ----------------
-    localparam CFG_W = 1 + 8;    // enable + master alpha
+    localparam CFG_W = 1 + 8 + 8 + 8;    // enable + alpha + brightness + contrast
     wire [CFG_W-1:0] cfg_p;
-    sync2 #(.W(CFG_W)) u_cfg_cdc (.clk(pclk), .d({osd_enable, osd_alpha}), .q(cfg_p));
-    wire       p_enable = cfg_p[8];
-    wire [7:0] p_alpha  = cfg_p[7:0];
+    sync2 #(.W(CFG_W)) u_cfg_cdc (
+        .clk(pclk), .d({osd_enable, osd_alpha, brightness, contrast}), .q(cfg_p));
+    wire       p_enable = cfg_p[24];
+    wire [7:0] p_alpha  = cfg_p[23:16];
+    wire [7:0] p_bright = cfg_p[15:8];
+    wire [7:0] p_contr  = cfg_p[7:0];
 
     // ---------------- compositor (pixel domain; writes on sclk) ----------------
     osd_compositor #(.CW(CW), .OSD_W(OSD_W), .OSD_H(OSD_H),
@@ -100,6 +104,7 @@ module top_rgb #(
         .in_de(p_de), .in_hsync(p_hsync), .in_vsync(p_vsync),
         .in_r(p_r), .in_g(p_g), .in_b(p_b),
         .osd_enable(p_enable), .osd_alpha(p_alpha),
+        .brightness(p_bright), .contrast(p_contr),
         .fb_wr_clk(sclk), .fb_we(fb_we), .fb_waddr(fb_waddr), .fb_wdata(fb_wdata),
         .pal_wr_clk(sclk), .pal_we(pal_we), .pal_waddr(pal_waddr), .pal_wdata(pal_wdata),
         .flip_req(flip_req), .flip_done(flip_done),

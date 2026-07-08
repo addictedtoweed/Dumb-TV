@@ -46,7 +46,7 @@ module top #(
     wire [7:0]     vr, vg, vb;
 
     wire           osd_enable;
-    wire [7:0]     osd_alpha;
+    wire [7:0]     osd_alpha, brightness, contrast;
 
     video_timing #(.CW(CW)) u_timing (
         .clk(clk), .rst(rst), .hsync(hsync), .vsync(vsync), .de(de), .x(x), .y(y));
@@ -56,7 +56,8 @@ module top #(
     ctrl_regs u_ctrl (
         .clk(clk), .rst(rst),
         .addr(ctrl_addr), .wdata(ctrl_wdata), .we(ctrl_we),
-        .osd_enable(osd_enable), .osd_alpha(osd_alpha), .mux_sel(mux_sel));
+        .osd_enable(osd_enable), .osd_alpha(osd_alpha), .mux_sel(mux_sel),
+        .brightness(brightness), .contrast(contrast));
 
     osd_compositor #(.CW(CW), .OSD_W(OSD_W), .OSD_H(OSD_H),
                      .ACTIVE_W(ACTIVE_W), .ACTIVE_H(ACTIVE_H), .FB_AW(FB_AW)) u_osd (
@@ -64,6 +65,7 @@ module top #(
         .in_de(de), .in_hsync(hsync), .in_vsync(vsync),
         .in_r(vr), .in_g(vg), .in_b(vb),
         .osd_enable(osd_enable), .osd_alpha(osd_alpha),
+        .brightness(brightness), .contrast(contrast),
         .fb_wr_clk(clk), .fb_we(fb_we), .fb_waddr(fb_waddr), .fb_wdata(fb_wdata),
         .pal_wr_clk(clk), .pal_we(pal_we), .pal_waddr(pal_waddr), .pal_wdata(pal_wdata),
         .flip_req(flip_req), .flip_done(flip_done),

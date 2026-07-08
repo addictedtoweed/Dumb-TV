@@ -32,7 +32,13 @@ OP_FBW, OP_FBF, OP_PAL = 0x20, 0x21, 0x26
 OP_CLEAR, OP_FLIP = 0x27, 0x28
 OP_GUP, OP_GBLIT, OP_FRECT = 0x22, 0x23, 0x25
 OP_TEXT, OP_MUXSEL = 0x24, 0x40
+OP_BRIGHT, OP_CONTR = 0x30, 0x31
 RSP_ACK, RSP_NACK, RSP_INFO = 0x80, 0x81, 0x82
+
+
+def pixmath(v, bright, con):        # mirror of pixmath() in osd_compositor.v
+    s = (((v - 128) * con) >> 7) + bright
+    return max(0, min(255, s))
 
 
 def crc8(data: bytes) -> int:
@@ -400,6 +406,26 @@ async def test_draw_text(dut):
             exp = (blend(vr, r, w), blend(vg, g, w), blend(vb, b, w))
         assert got == exp, f"({x},{y}) idx={idx}: {got} != {exp}"
     assert seen1 and seen2
+
+
+@cocotb.test()
+async def test_picture(dut):
+    """BRIGHTNESS/CONTRAST adjust the video (OSD off -> output = pixmath(video))."""
+    cocotb.start_soon(Clock(dut.clk, 10, units="ns").start())
+    await reset(dut)
+    q = start_monitor(dut)
+    bright, con = 200, 160
+    await send_frame(dut, OP_BRIGHT, bytes([bright]))
+    cmd, _ = await recv_frame(dut, q); assert cmd == RSP_ACK
+    await send_frame(dut, OP_CONTR, bytes([con]))
+    cmd, _ = await recv_frame(dut, q); assert cmd == RSP_ACK
+
+    frame = await capture_frame(dut)
+    assert frame
+    for (x, y), got in frame.items():
+        vr, vg, vb = pattern(x, y)
+        exp = (pixmath(vr, bright, con), pixmath(vg, bright, con), pixmath(vb, bright, con))
+        assert got == exp, f"({x},{y}): {got} != {exp}"
 
 
 @cocotb.test()

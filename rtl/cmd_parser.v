@@ -56,12 +56,13 @@ module cmd_parser #(
                OP_EN   = 8'h10, OP_ALPHA = 8'h12,
                OP_GUP  = 8'h22, OP_GBLIT = 8'h23, OP_TEXT = 8'h24, OP_FRECT = 8'h25,
                OP_FBW  = 8'h20, OP_FBF   = 8'h21, OP_PAL = 8'h26,
-               OP_CLEAR = 8'h27, OP_FLIP = 8'h28, OP_MUXSEL = 8'h40;
+               OP_CLEAR = 8'h27, OP_FLIP = 8'h28, OP_MUXSEL = 8'h40,
+               OP_BRIGHT = 8'h30, OP_CONTR = 8'h31;
     localparam RSP_ACK = 8'h80, RSP_NACK = 8'h81, RSP_INFO = 8'h82;
     localparam ERR_CRC = 8'h01, ERR_LEN  = 8'h02, ERR_UNK  = 8'h03, ERR_RANGE = 8'h04;
     localparam MAX_TEXT = 32;                        // max DRAW_TEXT string length
     // ---- ctrl_regs addresses ----
-    localparam A_EN = 4'd0, A_ALPHA = 4'd1, A_MUX = 4'd2;
+    localparam A_EN = 4'd0, A_ALPHA = 4'd1, A_MUX = 4'd2, A_BRIGHT = 4'd3, A_CONTR = 4'd4;
     // ---- INFO constants ----
     localparam [15:0] MAX_W = 16'd1920, MAX_H = 16'd1080;
     localparam FW = FB_AW + 1;                       // canvas counter width
@@ -203,7 +204,7 @@ module cmd_parser #(
                         OP_FRECT:         bad_len <= (len_full != 16'd9);  // x y w h index
                         OP_GUP:           bad_len <= (len_full != (16'd1 + GPIX)); // slot + pixels
                         OP_TEXT:          bad_len <= (len_full < 16'd5);   // x y + >=1 char
-                        OP_MUXSEL:        bad_len <= (len_full != 16'd1);
+                        OP_MUXSEL, OP_BRIGHT, OP_CONTR: bad_len <= (len_full != 16'd1);
                         OP_FBW:           bad_len <= (len_full < 16'd3);
                         default:          bad_len <= 1'b0; // unknown -> NACK in EXEC
                     endcase
@@ -322,6 +323,16 @@ module cmd_parser #(
                         end
                         OP_MUXSEL: begin             // select input mux
                             ctrl_addr <= A_MUX; ctrl_wdata <= {12'd0, pbuf[0][3:0]};
+                            ctrl_we <= 1'b1;
+                            build_ack(cmd); state <= S_RLOAD;
+                        end
+                        OP_BRIGHT: begin             // picture brightness
+                            ctrl_addr <= A_BRIGHT; ctrl_wdata <= {8'd0, pbuf[0]};
+                            ctrl_we <= 1'b1;
+                            build_ack(cmd); state <= S_RLOAD;
+                        end
+                        OP_CONTR: begin              // picture contrast
+                            ctrl_addr <= A_CONTR; ctrl_wdata <= {8'd0, pbuf[0]};
                             ctrl_we <= 1'b1;
                             build_ack(cmd); state <= S_RLOAD;
                         end

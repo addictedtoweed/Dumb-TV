@@ -217,9 +217,13 @@ come from the canvas index + palette, not registers.
    is implemented.
 8. ~~**Input mux (`INPUT_SELECT`)**~~ — done: a serial command drives the
    `mux_sel` output pins (external DP/HDMI mux, or fabric RGB-source select).
-9. **Picture controls** — BRIGHTNESS/CONTRAST registers + a pixel-math stage
-   (opcodes reserved).
-10. **Real I/O** — feed `rgb_in` from a real bridge chip (Lontium/TFP401) and
+9. ~~**Picture controls**~~ — done: `BRIGHTNESS`/`CONTRAST` + a pixel-math stage
+   on the video before the OSD blend (menus stay a fixed brightness).
+10. **On-board SERV RISC-V core** (future) — a tiny bit-serial RV32I core for
+    out-of-the-box brains: IR remote learning + custom control. Drives the same
+    `cmd_parser` over an *internal* UART bridge (a second command source beside
+    the physical host UART), firmware built with `riscv32-gcc` and uploadable.
+11. **Real I/O** — feed `rgb_in` from a real bridge chip (Lontium/TFP401) and
     drive the parallel-RGB output into an RGB-to-LVDS serializer, on the chosen
     prototype board. (No RTL change — the FPGA is parallel-RGB in and out.)
 
