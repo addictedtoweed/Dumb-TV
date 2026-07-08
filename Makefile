@@ -41,10 +41,11 @@ VERILOG_SOURCES = \
 TOPLEVEL ?= top
 MODULE   ?= test_compositor
 
-# The vendored SERV core is only pulled in for the serv_soc build, so its lint
-# doesn't affect the other suites.
-ifeq ($(TOPLEVEL),serv_soc)
-VERILOG_SOURCES += rtl/serv_soc.v \
+# The vendored SERV core is only pulled in for builds that instantiate it
+# (serv_soc standalone, or top_serv which embeds it), so its lint doesn't affect
+# the other suites and non-SERV tops don't need the module on the source list.
+ifneq (,$(filter serv_soc top_serv,$(TOPLEVEL)))
+VERILOG_SOURCES += rtl/top_serv.v rtl/serv_soc.v \
     $(wildcard rtl/serv/serv_top.v rtl/serv/serv_state.v rtl/serv/serv_decode.v \
                rtl/serv/serv_immdec.v rtl/serv/serv_bufreg.v rtl/serv/serv_bufreg2.v \
                rtl/serv/serv_ctrl.v rtl/serv/serv_alu.v rtl/serv/serv_rf_if.v \
