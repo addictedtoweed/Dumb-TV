@@ -73,10 +73,6 @@ does exactly what you tell it — and you tell it over a **plain serial port**.
   backend (`CANVAS=bram|psram`), and rebuild — everything is board- and
   vendor-tool independent, and testable in simulation with no hardware.
 
-The privacy pitch isn't a promise you have to trust — it's structural: a display
-whose only control surface is an open serial protocol you can read, script, and
-audit.
-
 ## What maps to what in the real product
 
 | Scaffold block      | Real product                                              |
