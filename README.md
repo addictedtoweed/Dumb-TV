@@ -220,10 +220,16 @@ come from the canvas index + palette, not registers.
 9. ~~**Picture controls + backlight**~~ — done: `BRIGHTNESS`/`CONTRAST` (a
    pixel-math stage on the video before the OSD blend) and `BACKLIGHT` (an 8-bit
    PWM output pin for a CCFL inverter or LED-driver dimming).
-10. **On-board SERV RISC-V core** (future) — a tiny bit-serial RV32I core for
-    out-of-the-box brains: IR remote learning + custom control. Drives the same
-    `cmd_parser` over an *internal* UART bridge (a second command source beside
-    the physical host UART), firmware built with `riscv32-gcc` and uploadable.
+10. **On-board SERV RISC-V core** (in progress) — a tiny bit-serial RV32I core
+    for out-of-the-box brains: IR remote learning + custom control, driving the
+    same `cmd_parser` over an *internal* UART bridge, firmware built with
+    `riscv32-gcc` and uploadable.
+    - ~~step 1: two-source command mux/arbiter~~ — done (`cmd_mux.v`, `fifo.v`,
+      `top_mux.v`): host + internal command sources share one parser.
+    - ~~step 2: program RAM + firmware upload~~ — done (`fw_mem.v` 16 KB dual-port
+      + `FW_HALT`/`FW_WRITE`/`FW_START`; core held in reset until loaded).
+    - next: drop in the SERV/Servant core on the RAM's core port + its internal
+      UART; then the IR GPIO + example firmware.
 11. **Real I/O** — feed `rgb_in` from a real bridge chip (Lontium/TFP401) and
     drive the parallel-RGB output into an RGB-to-LVDS serializer, on the chosen
     prototype board. (No RTL change — the FPGA is parallel-RGB in and out.)

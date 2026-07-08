@@ -32,6 +32,7 @@ VERILOG_SOURCES = \
     rtl/top_rgb.v \
     rtl/fifo.v \
     rtl/cmd_mux.v \
+    rtl/fw_mem.v \
     rtl/top_mux.v
 
 # Default target is the compositor pipeline. Run the UART suite with:

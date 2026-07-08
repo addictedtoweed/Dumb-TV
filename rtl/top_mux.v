@@ -24,7 +24,11 @@ module top_mux #(
     output wire       tx0,
     input  wire       rx1,        // internal / SERV link
     output wire       tx1,
-    output wire [3:0] mux_sel
+    output wire [3:0] mux_sel,
+    // SERV firmware RAM: core reset + a read-back port (stands in for the core)
+    output wire       core_rst,
+    input  wire [13:0] fw_raddr,
+    output wire [7:0]  fw_rdata
 );
     // UART receivers -> byte streams
     wire [7:0] s0_data, s1_data;  wire s0_valid, s1_valid;
@@ -60,6 +64,7 @@ module top_mux #(
     always @(posedge clk) flip_done_r <= rst ? 1'b0 : flip_req_w;
 
     wire [3:0]  ctrl_addr;  wire [15:0] ctrl_wdata;  wire ctrl_we;
+    wire        fw_we;      wire [13:0] fw_waddr;    wire [7:0] fw_wdata;
 
     cmd_parser #(.OSD_W(OSD_W), .OSD_H(OSD_H), .FB_AW(FB_AW)) u_parser (
         .clk(clk), .rst(rst),
@@ -68,6 +73,7 @@ module top_mux #(
         .ctrl_addr(ctrl_addr), .ctrl_wdata(ctrl_wdata), .ctrl_we(ctrl_we),
         .fb_we(), .fb_waddr(), .fb_wdata(),
         .pal_we(), .pal_waddr(), .pal_wdata(),
+        .fw_we(fw_we), .fw_waddr(fw_waddr), .fw_wdata(fw_wdata),
         .flip_req(flip_req_w), .flip_done(flip_done_r),
         .rx_ready(p_rx_ready), .busy(p_busy));
 
@@ -76,7 +82,12 @@ module top_mux #(
         .clk(clk), .rst(rst),
         .addr(ctrl_addr), .wdata(ctrl_wdata), .we(ctrl_we),
         .osd_enable(), .osd_alpha(), .mux_sel(mux_sel),
-        .brightness(), .contrast(), .backlight());
+        .brightness(), .contrast(), .backlight(), .core_halt(core_rst));
+
+    // firmware / program RAM: host writes on port A, read-back on port B
+    fw_mem u_fw (
+        .wr_clk(clk), .we(fw_we), .waddr(fw_waddr), .wdata(fw_wdata),
+        .rd_clk(clk), .raddr(fw_raddr), .rdata(fw_rdata));
 endmodule
 
 `default_nettype wire

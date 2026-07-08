@@ -28,6 +28,7 @@ OP_FBW, OP_FBF, OP_PAL = 0x20, 0x21, 0x26
 OP_GUP, OP_GBLIT, OP_TEXT, OP_FRECT = 0x22, 0x23, 0x24, 0x25
 OP_CLEAR, OP_FLIP, OP_MUXSEL = 0x27, 0x28, 0x40
 OP_BRIGHT, OP_CONTR, OP_BL = 0x30, 0x31, 0x32
+OP_FWHALT, OP_FW, OP_FWSTART = 0x50, 0x51, 0x52
 RSP_ACK, RSP_NACK, RSP_INFO = 0x80, 0x81, 0x82
 
 
@@ -111,3 +112,11 @@ class DumbTV:
     def brightness(self, level):  self._cmd(OP_BRIGHT, bytes([level]))  # 128 = neutral
     def contrast(self, level):    self._cmd(OP_CONTR, bytes([level]))   # 128 = unity
     def backlight(self, duty):    self._cmd(OP_BL, bytes([duty]))       # 0..255 PWM
+    # on-board RISC-V core firmware
+    def fw_halt(self):            self._cmd(OP_FWHALT)
+    def fw_start(self):           self._cmd(OP_FWSTART)
+    def fw_write(self, addr, data, chunk=512):
+        for i in range(0, len(data), chunk):
+            self._cmd(OP_FW, struct.pack("<H", addr + i) + bytes(data[i:i + chunk]))
+    def load_firmware(self, blob):    # halt -> upload -> run
+        self.fw_halt(); self.fw_write(0, blob); self.fw_start()

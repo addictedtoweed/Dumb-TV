@@ -56,6 +56,7 @@ module top_uart #(
         .ctrl_addr(ctrl_addr), .ctrl_wdata(ctrl_wdata), .ctrl_we(ctrl_we),
         .fb_we(fb_we), .fb_waddr(fb_waddr), .fb_wdata(fb_wdata),
         .pal_we(pal_we), .pal_waddr(pal_waddr), .pal_wdata(pal_wdata),
+        .fw_we(), .fw_waddr(), .fw_wdata(),
         .flip_req(flip_req), .flip_done(flip_done),
         .rx_ready(), .busy());
 
@@ -66,7 +67,8 @@ module top_uart #(
         .clk(clk), .rst(rst),
         .addr(ctrl_addr), .wdata(ctrl_wdata), .we(ctrl_we),
         .osd_enable(osd_enable), .osd_alpha(osd_alpha), .mux_sel(mux_sel),
-        .brightness(brightness), .contrast(contrast), .backlight(bl_duty));
+        .brightness(brightness), .contrast(contrast), .backlight(bl_duty),
+        .core_halt());
 
     pwm u_pwm (.clk(clk), .rst(rst), .duty(bl_duty), .pwm(backlight));
 

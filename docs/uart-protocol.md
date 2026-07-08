@@ -78,6 +78,9 @@ address gets a `NACK` with the reason code.
 | `0x31` | CONTRAST      | `level`(1) — picture contrast, 128 = unity gain     |
 | `0x32` | BACKLIGHT     | `duty`(1) — backlight PWM, 0 = off .. 255 = full    |
 | `0x40` | INPUT_SELECT  | `sel`(1) — set the input mux select (0..15)         |
+| `0x50` | FW_HALT       | *(none)* — hold the on-board RISC-V core in reset   |
+| `0x51` | FW_WRITE      | `addr`(2) + N firmware bytes (into program RAM)     |
+| `0x52` | FW_START      | *(none)* — release the core (run the firmware)      |
 
 ### Field meanings
 
@@ -269,6 +272,13 @@ class DumbTV:
     def brightness(self, level):   self._cmd(0x30, bytes([level]))   # 128 = neutral
     def contrast(self, level):     self._cmd(0x31, bytes([level]))   # 128 = unity
     def backlight(self, duty):     self._cmd(0x32, bytes([duty]))    # 0..255 PWM
+    def fw_halt(self):             self._cmd(0x50)
+    def fw_start(self):            self._cmd(0x52)
+    def fw_write(self, addr, data, chunk=512):
+        for i in range(0, len(data), chunk):
+            self._cmd(0x51, struct.pack("<H", addr + i) + bytes(data[i:i+chunk]))
+    def load_firmware(self, blob):     # halt, upload, run
+        self.fw_halt(); self.fw_write(0, blob); self.fw_start()
 
     def write_indices(self, indices, addr=0, chunk=512):
         for i in range(0, len(indices), chunk):
@@ -310,6 +320,24 @@ neutral at `brightness = 128, contrast = 128`.
 inverter's dimming input or an LED-driver PWM/EN. Defaults to full on so the
 panel is lit out of the box.
 
+## Firmware upload (on-board RISC-V core)
+
+The board can host a small RISC-V core (SERV) with ~16 KB of program RAM for
+custom brains (e.g. IR-remote learning). Its firmware is uploadable over the same
+serial link, so it's user-hackable:
+
+```
+FW_HALT                    # hold the core in reset
+FW_WRITE addr, bytes...    # stream the binary into program RAM (chunk + wait ACK)
+FW_START                   # release the core -> it runs your firmware
+```
+
+Build with `riscv32-gcc` + `objcopy -O binary`, then stream the raw blob (the
+core starts held in reset at power-on, so it never runs stale RAM). The core then
+drives the OSD/control commands over an *internal* command link — the same
+protocol, arbitrated with the host link (see the command mux). An out-of-range
+`FW_WRITE` returns `NACK(range)`.
+
 ---
 
 ## 8. Quick reference card
@@ -335,6 +363,9 @@ INT: little-endian    PIXEL: 4-bit palette index    ADDR: y*osd_w + x
 0x31 CONTRAST     level             (128 = unity)
 0x32 BACKLIGHT    duty              (0=off .. 255=full)
 0x40 INPUT_SELECT sel               (set input mux 0..15)
+0x50 FW_HALT                        (hold RISC-V core in reset)
+0x51 FW_WRITE     addr bytes...     (firmware -> program RAM)
+0x52 FW_START                       (release core / run)
 
 0x80 ACK cmd     0x81 NACK cmd err     0x82 INFO ...
 err: 01 crc  02 len  03 unknown  04 range
