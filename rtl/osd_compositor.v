@@ -48,6 +48,11 @@ module osd_compositor #(
     input  wire        pal_we,
     input  wire [3:0]  pal_waddr,
     input  wire [31:0] pal_wdata,       // {A,R,G,B}
+    // double-buffer flip handshake: flip_req (toggle, fb_wr_clk domain) requests
+    // a front/back swap; it is applied at the next VSync and acknowledged by
+    // toggling flip_done (pixel-clock domain).
+    input  wire        flip_req,
+    output reg         flip_done,
     // output video stream (registered, +3 clk)
     output reg         out_de,
     output reg         out_hsync,
@@ -77,15 +82,49 @@ module osd_compositor #(
     wire [CXW-1:0] cx = x_acc[FRAC + CXW - 1 : FRAC];
     wire [CYW-1:0] cy = y_acc[FRAC + CYW - 1 : FRAC];
 
+    // ---- double-buffer: read the front bank, write the back bank ----
+    // flip_req (fb_wr_clk domain) crosses into the pixel clock; a pending flip is
+    // applied at VSync (no tearing) and acknowledged via flip_done. The write
+    // side needs the *back* bank, so front_bank is synced into fb_wr_clk.
+    reg  front_bank;
+    reg  flip_req_s1, flip_req_s2, flip_req_seen, flip_pending;
+    always @(posedge clk) begin
+        if (rst) begin
+            front_bank   <= 1'b0;
+            flip_req_s1  <= 1'b0; flip_req_s2 <= 1'b0;
+            flip_req_seen<= 1'b0; flip_pending<= 1'b0;
+            flip_done    <= 1'b0;
+        end else begin
+            {flip_req_s2, flip_req_s1} <= {flip_req_s1, flip_req};   // 2FF sync
+            if (flip_req_s2 != flip_req_seen) begin
+                flip_req_seen <= flip_req_s2;
+                flip_pending  <= 1'b1;                                // new flip asked
+            end
+            if (in_vsync && flip_pending) begin
+                front_bank   <= ~front_bank;                         // swap at VSync
+                flip_pending <= 1'b0;
+                flip_done    <= ~flip_done;                          // ack the swap
+            end
+        end
+    end
+
+    // back bank in the write clock domain (= ~front)
+    reg front_wr1, front_wr2;
+    always @(posedge fb_wr_clk) begin
+        if (rst) begin front_wr1 <= 1'b0; front_wr2 <= 1'b0; end
+        else          {front_wr2, front_wr1} <= {front_wr1, front_bank};
+    end
+    wire wr_bank = ~front_wr2;
+
     // ---- canvas (indexed) : read gives index one clock later ----
-    // The (cx, cy, new_frame) read port is the swappable canvas-storage seam:
-    // osd_fb is osd_fb_bram.v (BRAM) or osd_fb_psram.v (external memory),
-    // selected by the build (CANVAS=bram|psram). new_frame = vsync lets the
-    // PSRAM backend restart its line-buffer prefetch at row 0.
+    // The (bank, cx, cy, new_frame) read port is the swappable canvas-storage
+    // seam: osd_fb is osd_fb_bram.v (BRAM) or osd_fb_psram.v (external memory),
+    // selected by the build (CANVAS=bram|psram).
     wire [3:0] cidx;
     osd_fb #(.OSD_W(OSD_W), .OSD_H(OSD_H), .AW(FB_AW)) u_fb (
-        .wr_clk(fb_wr_clk), .we(fb_we), .waddr(fb_waddr), .wdata(fb_wdata),
-        .rd_clk(clk), .rd_cx(cx), .rd_cy(cy), .rd_newframe(in_vsync), .rdata(cidx));
+        .wr_clk(fb_wr_clk), .we(fb_we), .wr_bank(wr_bank), .waddr(fb_waddr), .wdata(fb_wdata),
+        .rd_clk(clk), .rd_bank(front_bank), .rd_cx(cx), .rd_cy(cy),
+        .rd_newframe(in_vsync), .rdata(cidx));
 
     // ---- palette : addressed by the canvas index, RGBA one clock later ----
     wire [31:0] pcolor;

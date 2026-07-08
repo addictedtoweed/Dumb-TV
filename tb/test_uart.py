@@ -29,6 +29,7 @@ Y_STEP = (OSD_H << 16) // ACTIVE_H
 OP_PING, OP_INFO = 0x01, 0x02
 OP_EN, OP_ALPHA = 0x10, 0x12
 OP_FBW, OP_FBF, OP_PAL = 0x20, 0x21, 0x26
+OP_CLEAR, OP_FLIP = 0x27, 0x28
 RSP_ACK, RSP_NACK, RSP_INFO = 0x80, 0x81, 0x82
 
 
@@ -212,6 +213,32 @@ async def test_fb_range(dut):
 
 
 @cocotb.test()
+async def test_clear_flip(dut):
+    """CLEAR wipes the back buffer to an index; FLIP makes it visible."""
+    cocotb.start_soon(Clock(dut.clk, 10, units="ns").start())
+    await reset(dut)
+    q = start_monitor(dut)
+
+    # palette entry 1 = solid opaque red
+    await send_frame(dut, OP_PAL, bytes([1, 255, 255, 0, 0]))
+    cmd, _ = await recv_frame(dut, q); assert cmd == RSP_ACK
+    # CLEAR the whole back canvas to index 1
+    await send_frame(dut, OP_CLEAR, bytes([1]))
+    cmd, _ = await recv_frame(dut, q); assert cmd == RSP_ACK
+    await send_frame(dut, OP_ALPHA, bytes([255]))
+    cmd, _ = await recv_frame(dut, q); assert cmd == RSP_ACK
+    await send_frame(dut, OP_EN, bytes([1]))
+    cmd, _ = await recv_frame(dut, q); assert cmd == RSP_ACK
+    await send_frame(dut, OP_FLIP)
+    cmd, _ = await recv_frame(dut, q); assert cmd == RSP_ACK
+
+    frame = await capture_frame(dut)
+    assert frame
+    for (x, y), got in frame.items():
+        assert got == (255, 0, 0), f"({x},{y}) not solid red: {got}"
+
+
+@cocotb.test()
 async def test_overlay_upload(dut):
     """Upload a palette + indexed canvas over UART; verify it appears upscaled
     and palette-mapped in the video output."""
@@ -233,6 +260,15 @@ async def test_overlay_upload(dut):
     await send_frame(dut, OP_ALPHA, bytes([master]))
     cmd, _ = await recv_frame(dut, q); assert cmd == RSP_ACK
     await send_frame(dut, OP_EN, bytes([1]))
+    cmd, _ = await recv_frame(dut, q); assert cmd == RSP_ACK
+
+    # double-buffer: the upload went to the back buffer, so it's not visible yet
+    pre = await capture_frame(dut)
+    for (x, y), got in pre.items():
+        assert got == pattern(x, y), f"pre-flip not passthrough at ({x},{y}): {got}"
+
+    # FLIP swaps at VSync; the ACK comes only after the swap
+    await send_frame(dut, OP_FLIP)
     cmd, _ = await recv_frame(dut, q); assert cmd == RSP_ACK
 
     frame = await capture_frame(dut)

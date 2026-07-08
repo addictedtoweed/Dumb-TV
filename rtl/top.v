@@ -28,6 +28,9 @@ module top #(
     input  wire        pal_we,
     input  wire [3:0]  pal_waddr,
     input  wire [31:0] pal_wdata,
+    // double-buffer flip handshake
+    input  wire        flip_req,
+    output wire        flip_done,
     // output video stream
     output wire        out_de,
     output wire        out_hsync,
@@ -61,6 +64,7 @@ module top #(
         .osd_enable(osd_enable), .osd_alpha(osd_alpha),
         .fb_wr_clk(clk), .fb_we(fb_we), .fb_waddr(fb_waddr), .fb_wdata(fb_wdata),
         .pal_wr_clk(clk), .pal_we(pal_we), .pal_waddr(pal_waddr), .pal_wdata(pal_wdata),
+        .flip_req(flip_req), .flip_done(flip_done),
         .out_de(out_de), .out_hsync(out_hsync), .out_vsync(out_vsync),
         .out_r(out_r), .out_g(out_g), .out_b(out_b));
 endmodule

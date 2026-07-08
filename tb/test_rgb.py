@@ -29,6 +29,7 @@ Y_STEP = (OSD_H << 16) // ACTIVE_H
 OP_PING, OP_INFO = 0x01, 0x02
 OP_EN, OP_ALPHA = 0x10, 0x12
 OP_FBW, OP_FBF, OP_PAL = 0x20, 0x21, 0x26
+OP_CLEAR, OP_FLIP = 0x27, 0x28
 RSP_ACK, RSP_NACK, RSP_INFO = 0x80, 0x81, 0x82
 
 
@@ -215,7 +216,16 @@ async def test_overlay_upload(dut):
     await send_frame(dut, OP_EN, bytes([1]))
     cmd, _ = await recv_frame(dut, q); assert cmd == RSP_ACK
 
-    await sclks(dut, 50)   # let the config CDC + RAMs settle into pixel domain
+    await sclks(dut, 50)   # let the enable/alpha config CDC settle into pixel domain
+
+    # double-buffer: upload landed in the back buffer -> not visible yet
+    pre = await capture_frame(dut)
+    for (x, y), got in pre.items():
+        assert got == pattern(x, y), f"pre-flip not passthrough at ({x},{y}): {got}"
+
+    # FLIP crosses sclk->pclk, swaps at VSync, and only ACKs after the swap
+    await send_frame(dut, OP_FLIP)
+    cmd, _ = await recv_frame(dut, q); assert cmd == RSP_ACK
 
     frame = await capture_frame(dut)
     assert frame

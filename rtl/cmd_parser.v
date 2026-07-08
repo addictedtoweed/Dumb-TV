@@ -42,23 +42,28 @@ module cmd_parser #(
     // to palette write port
     output reg         pal_we,
     output reg [3:0]   pal_waddr,
-    output reg [31:0]  pal_wdata
+    output reg [31:0]  pal_wdata,
+    // double-buffer flip handshake (to/from compositor)
+    output reg         flip_req,
+    input  wire        flip_done
 );
     // ---- opcodes ----
     localparam OP_PING = 8'h01, OP_INFO  = 8'h02,
                OP_EN   = 8'h10, OP_ALPHA = 8'h12,
-               OP_FBW  = 8'h20, OP_FBF   = 8'h21, OP_PAL = 8'h26;
+               OP_FBW  = 8'h20, OP_FBF   = 8'h21, OP_PAL = 8'h26,
+               OP_CLEAR = 8'h27, OP_FLIP = 8'h28;
     localparam RSP_ACK = 8'h80, RSP_NACK = 8'h81, RSP_INFO = 8'h82;
     localparam ERR_CRC = 8'h01, ERR_LEN  = 8'h02, ERR_UNK  = 8'h03, ERR_RANGE = 8'h04;
     // ---- ctrl_regs addresses ----
     localparam A_EN = 4'd0, A_ALPHA = 4'd1;
     // ---- INFO constants ----
     localparam [15:0] MAX_W = 16'd1920, MAX_H = 16'd1080;
-    localparam [15:0] FB_DEPTH = OSD_W * OSD_H;
+    localparam FW = FB_AW + 1;                       // canvas counter width
+    localparam [FW-1:0] FB_DEPTH = OSD_W * OSD_H;
 
     // ---- states ----
     localparam S_SYNC=0, S_CMD=1, S_LENL=2, S_LENH=3, S_PAY=4, S_CRC=5,
-               S_EXEC=6, S_FILL=7, S_RLOAD=8, S_RWAIT=9;
+               S_EXEC=6, S_FILL=7, S_RLOAD=8, S_RWAIT=9, S_FLIPWAIT=10;
     reg [3:0] state;
 
     reg [7:0]  cmd, crc, len_lo;
@@ -70,9 +75,13 @@ module cmd_parser #(
     // fb-write streaming
     reg [15:0] fb_addr;
 
-    // fill engine
-    reg [15:0] fill_addr, fill_cnt;
-    reg [3:0]  fill_idx;
+    // fill engine (also used by CLEAR: full-canvas fill)
+    reg [FW-1:0] fill_addr, fill_cnt;
+    reg [3:0]    fill_idx;
+    reg [7:0]    fill_ackcmd;      // which cmd the fill/clear acks
+
+    // flip handshake (flip_done crosses from the pixel domain)
+    reg flip_done_s1, flip_done_s2, flip_done_prev;
 
     // response builder
     reg [7:0]  resp [0:15];
@@ -125,11 +134,16 @@ module cmd_parser #(
             ctrl_we  <= 1'b0;
             fb_we    <= 1'b0;
             pal_we   <= 1'b0;
+            flip_req <= 1'b0;
+            {flip_done_s2, flip_done_s1, flip_done_prev} <= 3'b000;
         end else begin
             tx_start <= 1'b0;
             ctrl_we  <= 1'b0;
             fb_we    <= 1'b0;
             pal_we   <= 1'b0;
+
+            // sync flip_done (pixel domain) into this clock
+            {flip_done_s2, flip_done_s1} <= {flip_done_s1, flip_done};
 
             case (state)
                 // ---------------- receive framing ----------------
@@ -148,8 +162,9 @@ module cmd_parser #(
                     pay_idx   <= 16'd0;
                     range_err <= 1'b0;
                     case (cmd)
-                        OP_PING, OP_INFO: bad_len <= (len_full != 16'd0);
+                        OP_PING, OP_INFO, OP_FLIP: bad_len <= (len_full != 16'd0);
                         OP_EN, OP_ALPHA:  bad_len <= (len_full != 16'd1);
+                        OP_CLEAR:         bad_len <= (len_full > 16'd1);   // 0 or 1 byte
                         OP_FBF, OP_PAL:   bad_len <= (len_full != 16'd5);
                         OP_FBW:           bad_len <= (len_full < 16'd3);
                         default:          bad_len <= 1'b0; // unknown -> NACK in EXEC
@@ -202,9 +217,17 @@ module cmd_parser #(
                             state <= S_RLOAD;
                         end
                         OP_FBF: begin
-                            fill_addr <= {pbuf[1], pbuf[0]};
-                            fill_cnt  <= {pbuf[3], pbuf[2]};
-                            fill_idx  <= pbuf[4][3:0];
+                            fill_addr   <= {pbuf[1], pbuf[0]};
+                            fill_cnt    <= {pbuf[3], pbuf[2]};
+                            fill_idx    <= pbuf[4][3:0];
+                            fill_ackcmd <= OP_FBF;
+                            state <= S_FILL;
+                        end
+                        OP_CLEAR: begin              // wipe the whole back canvas
+                            fill_addr   <= {FW{1'b0}};
+                            fill_cnt    <= FB_DEPTH;
+                            fill_idx    <= (len != 16'd0) ? pbuf[0][3:0] : 4'd0;
+                            fill_ackcmd <= OP_CLEAR;
                             state <= S_FILL;
                         end
                         OP_PAL: begin
@@ -213,12 +236,16 @@ module cmd_parser #(
                             pal_wdata <= {pbuf[1], pbuf[2], pbuf[3], pbuf[4]}; // A,R,G,B
                             build_ack(cmd); state <= S_RLOAD;
                         end
+                        OP_FLIP: begin               // request buffer swap at VSync
+                            flip_req <= ~flip_req;
+                            state <= S_FLIPWAIT;
+                        end
                         default: begin build_nack(cmd, ERR_UNK); state <= S_RLOAD; end
                     endcase
                 end
                 // ---------------- OSD_FB_FILL: write `count` indices ----------------
                 S_FILL: begin
-                    if (fill_cnt != 16'd0) begin
+                    if (fill_cnt != {FW{1'b0}}) begin
                         if (fill_addr < FB_DEPTH) begin
                             fb_we    <= 1'b1;
                             fb_waddr <= fill_addr[FB_AW-1:0];
@@ -229,10 +256,16 @@ module cmd_parser #(
                         fill_addr <= fill_addr + 1'b1;
                         fill_cnt  <= fill_cnt - 1'b1;
                     end else begin
-                        if (range_err) build_nack(OP_FBF, ERR_RANGE);
-                        else           build_ack(OP_FBF);
+                        if (range_err) build_nack(fill_ackcmd, ERR_RANGE);
+                        else           build_ack(fill_ackcmd);
                         state <= S_RLOAD;
                     end
+                end
+                // ---------------- FLIP: wait for the VSync swap, then ACK ----------------
+                S_FLIPWAIT: if (flip_done_s2 != flip_done_prev) begin
+                    flip_done_prev <= flip_done_s2;
+                    build_ack(OP_FLIP);
+                    state <= S_RLOAD;
                 end
                 // ---------------- transmit response ----------------
                 S_RLOAD: if (!tx_busy) begin

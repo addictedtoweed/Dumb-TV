@@ -212,9 +212,11 @@ come from the canvas index + palette, not registers.
 4. ~~**Full-screen indexed OSD + palette + upscaler**~~ — done (`osd_fb_*.v`,
    `palette.v`, `osd_compositor.v`).
 5. ~~**Canvas storage seam (BRAM or external PSRAM)**~~ — done (`CANVAS=`).
-6. **Glyph subsystem (stage 2)** — glyph store + blit engine + double-buffered
-   canvas + `CLEAR`/`FLIP` + glyph/text/fill commands (see `docs/uart-protocol.md`
-   §7). Lands the flicker-free draw cycle and the config-CDC-at-vblank fix.
+6. ~~**Double-buffered canvas + `CLEAR`/`FLIP`**~~ — done (flicker-free draw
+   cycle; FLIP applied at VSync with ACK-after-swap, i.e. the config-CDC-at-vblank
+   fix).
+7. **Glyph subsystem (stage 2b)** — glyph store + blit engine + glyph/text/fill
+   commands (see `docs/uart-protocol.md` §7), drawing into the back buffer.
 7. **Picture controls** — BRIGHTNESS/CONTRAST registers + a pixel-math stage
    (opcodes reserved).
 8. **Real I/O** — feed `rgb_in` from a real bridge chip (Lontium/TFP401) and

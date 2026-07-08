@@ -6,7 +6,8 @@ Dumb-TV FPGA. With it you can:
 - turn the on-screen overlay on/off and fade it
 - set the 16-color **palette**
 - **upload the overlay** as 4-bit palette indices into the OSD canvas
-- (planned) blit glyphs / text / rectangles and double-buffer — see §7
+- **double-buffer** it (`CLEAR` / `FLIP`) for flicker-free, tear-free updates
+- (planned) blit glyphs / text / rectangles — see §7
 
 The OSD is a **full-screen indexed plane**: a low-resolution canvas of 4-bit
 palette indices that the FPGA stretches (nearest-neighbour) to the whole active
@@ -67,6 +68,8 @@ address gets a `NACK` with the reason code.
 | `0x20` | OSD_FB_WRITE | `addr`(2) + N `index` bytes (low nibble = 4-bit index)|
 | `0x26` | PALETTE_SET  | `index`(1) `A`(1) `R`(1) `G`(1) `B`(1)                |
 | `0x21` | OSD_FB_FILL  | `addr`(2) `count`(2) `index`(1)                       |
+| `0x27` | CLEAR        | *(optional `index`(1); default 0)* — wipe back buffer |
+| `0x28` | FLIP         | *(none)* — swap buffers at VSync; ACK **after** swap  |
 | `0x30` | BRIGHTNESS *(reserved)* | `level`(1)                                 |
 | `0x31` | CONTRAST *(reserved)*   | `level`(1)                                 |
 
@@ -129,11 +132,28 @@ Because the plane is transparent wherever an index is 0, elements can sit
 anywhere on screen with no surrounding box; the video shows through everywhere
 else.
 
+### Double buffering — flicker-free redraw
+
+The canvas is **double-buffered**. All drawing (`OSD_FB_WRITE`, `OSD_FB_FILL`,
+`CLEAR`) goes to the hidden **back** buffer; the screen shows the **front**
+buffer. `FLIP` swaps them at the next VSync (no tearing), so a redraw only ever
+appears whole. The idiom:
+
+```
+CLEAR                 # wipe the back buffer
+... draw ...          # OSD_FB_WRITE / OSD_FB_FILL (and, later, glyph blits)
+FLIP                  # swap; the ACK arrives only after the swap completes
+```
+
+`FLIP`'s ACK is your frame sync point: it returns *after* the buffers have
+swapped, so the buffer you just released is safe to draw into next. (It's also a
+free ~60 Hz heartbeat.) A frame with a bad CRC mid-upload simply never gets
+flipped, so corruption is never shown.
+
 ### Latency note
 
 OSD updates are decoupled from the live video: the picture passes through at
-full speed regardless. (Flicker-free redraw via a back buffer + FLIP is planned;
-see §7.)
+full speed regardless of when you draw or flip.
 
 ---
 
@@ -196,6 +216,8 @@ class DumbTV:
         self._cmd(0x26, bytes([i, a, r, g, b]))
     def fill(self, addr, count, index):
         self._cmd(0x21, struct.pack("<HH", addr, count) + bytes([index]))
+    def clear(self, index=0):  self._cmd(0x27, bytes([index]))
+    def flip(self):            self._cmd(0x28)   # returns after the VSync swap
 
     def write_indices(self, indices, addr=0, chunk=512):
         for i in range(0, len(indices), chunk):
@@ -216,18 +238,20 @@ class DumbTV:
 tv = DumbTV("/dev/serial0", 115200)
 nfo = tv.info()
 print("canvas:", nfo["osd_w"], "x", nfo["osd_h"])
-tv.fill(0, nfo["osd_w"] * nfo["osd_h"], 0)          # clear to transparent
-tv.upload_image("logo.png", nfo["osd_w"], nfo["osd_h"])
+tv.clear(0)                                         # wipe the back buffer
+tv.upload_image("logo.png", nfo["osd_w"], nfo["osd_h"])  # draw into back buffer
 tv.alpha(255)
 tv.enable(True)
+tv.flip()                                           # show it (swaps at VSync)
 ```
 
 ---
 
 ## 7. Planned (stage 2) — not yet implemented
 
-The next firmware adds a glyph/blit toolkit and double-buffering. Opcodes are
-reserved here so host code can be written against the roadmap:
+Double-buffering (`CLEAR`/`FLIP`) is **done** (see §5). The next firmware adds a
+glyph/blit toolkit. Opcodes are reserved here so host code can be written against
+the roadmap:
 
 | Opcode | Name        | Payload (planned)                        |
 |--------|-------------|------------------------------------------|
@@ -235,10 +259,9 @@ reserved here so host code can be written against the roadmap:
 | `0x23` | GLYPH_BLIT  | `slot`(1) `x`(2) `y`(2) `pal`(1)          |
 | `0x24` | DRAW_TEXT   | `x`(2) `y`(2) `pal`(1) + ASCII bytes      |
 | `0x25` | FILL_RECT   | `x`(2) `y`(2) `w`(2) `h`(2) `index`(1)    |
-| `0x27` | CLEAR       | (optional index) — wipe the back buffer  |
-| `0x28` | FLIP        | (none) — swap buffers at VSync, ACK after |
 
-With double-buffering the flicker-free idiom becomes: `CLEAR` → draw → `FLIP`.
+These draw into the back buffer, so the `CLEAR` → draw → `FLIP` idiom extends to
+glyphs unchanged.
 
 ---
 
@@ -253,8 +276,10 @@ INT: little-endian    PIXEL: 4-bit palette index    ADDR: y*osd_w + x
 0x10 OSD_ENABLE  en
 0x12 OSD_ALPHA   a
 0x26 PALETTE_SET index A R G B      (index 0 = transparent)
-0x20 OSD_FB_WRITE addr indices...   (one 4-bit index per byte)
-0x21 OSD_FB_FILL  addr count index
+0x20 OSD_FB_WRITE addr indices...   (one 4-bit index per byte)   -> back buffer
+0x21 OSD_FB_FILL  addr count index                               -> back buffer
+0x27 CLEAR        [index]           (wipe back buffer)
+0x28 FLIP                           (swap at VSync; ACK after swap)
 
 0x80 ACK cmd     0x81 NACK cmd err     0x82 INFO ...
 err: 01 crc  02 len  03 unknown  04 range

@@ -1,15 +1,14 @@
-// osd_fb_bram.v  -- OSD canvas stored in on-chip block RAM (default backend).
+// osd_fb_bram.v  -- OSD canvas in on-chip block RAM (default backend).
 //
-// Selected by the build (CANVAS=bram in the Makefile). Presents the canvas
-// storage contract used by osd_compositor:
-//   write port : wr_clk, we, waddr (linear), wdata (4-bit index)   [host clock]
-//   read  port : rd_clk, rd_cx, rd_cy, rd_newframe -> rdata (4-bit) [pixel clock]
-// rd_newframe pulses at the start of each frame; the BRAM backend ignores it
-// (it is there for the PSRAM backend's line-buffer prefetch). The read is a
-// plain 1-clock dual-port RAM access.
+// Selected by the build (CANVAS=bram). Double-buffered: holds TWO canvases
+// (bank 0 / bank 1). The compositor reads the front bank (rd_bank) and all host
+// writes go to the back bank (wr_bank); FLIP swaps which is which at VSync.
 //
-// A 640x360 4bpp canvas is ~112 KB single-buffered -- fine for BRAM. For a
-// larger / higher-res / double-buffered canvas, build CANVAS=psram instead.
+//   write port : wr_clk, we, wr_bank, waddr (linear), wdata (4-bit index)  [host clk]
+//   read  port : rd_clk, rd_bank, rd_cx, rd_cy, rd_newframe -> rdata (4-bit) [pixel clk]
+//
+// rd_newframe pulses at frame start; the BRAM backend ignores it (it is there
+// for the PSRAM backend's line-buffer prefetch). Read is a plain 1-clock access.
 
 `default_nettype none
 
@@ -23,26 +22,31 @@ module osd_fb #(
     // write port (system / UART clock domain)
     input  wire            wr_clk,
     input  wire            we,
+    input  wire            wr_bank,
     input  wire [AW-1:0]   waddr,
     input  wire [3:0]      wdata,
     // read port (pixel clock domain, synchronous +1 clk)
     input  wire            rd_clk,
+    input  wire            rd_bank,
     input  wire [CXW-1:0]  rd_cx,
     input  wire [CYW-1:0]  rd_cy,
-    input  wire            rd_newframe,   // unused here (see PSRAM backend)
+    input  wire            rd_newframe,
     output reg  [3:0]      rdata
 );
-    reg [3:0] mem [0:(OSD_W*OSD_H)-1];
+    localparam DEPTH = OSD_W * OSD_H;
+    reg [3:0] mem [0:(2*DEPTH)-1];
+
+    wire [AW:0] waddr_full = (wr_bank ? DEPTH[AW:0] : {(AW+1){1'b0}}) + {1'b0, waddr};
+    wire [AW:0] rlin       = rd_cy * OSD_W + rd_cx;
+    wire [AW:0] raddr_full  = (rd_bank ? DEPTH[AW:0] : {(AW+1){1'b0}}) + rlin;
 
     always @(posedge wr_clk)
-        if (we) mem[waddr] <= wdata;
+        if (we) mem[waddr_full] <= wdata;
 
     always @(posedge rd_clk)
-        rdata <= mem[rd_cy * OSD_W + rd_cx];
+        rdata <= mem[raddr_full];
 
-    // rd_newframe is part of the canvas contract but only the PSRAM backend
-    // needs it; reference it so lint stays quiet.
-    wire _unused = &{1'b0, rd_newframe};
+    wire _unused = &{1'b0, rd_newframe};   // consumed by the PSRAM backend
 endmodule
 
 `default_nettype wire

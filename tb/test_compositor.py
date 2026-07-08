@@ -69,10 +69,22 @@ async def reset(dut):
     dut.pal_we.value = 0
     dut.pal_waddr.value = 0
     dut.pal_wdata.value = 0
+    dut.flip_req.value = 0
     for _ in range(5):
         await RisingEdge(dut.clk)
     dut.rst.value = 0
     await RisingEdge(dut.clk)
+
+
+async def flip(dut):
+    """Request a buffer swap and wait for it to be applied (at VSync)."""
+    prev = int(dut.flip_done.value)
+    dut.flip_req.value = 1 - int(dut.flip_req.value)
+    for _ in range(3 * FRAME_CYCLES):
+        await RisingEdge(dut.clk)
+        if int(dut.flip_done.value) != prev:
+            return
+    raise TimeoutError("flip not acknowledged")
 
 
 async def wr_ctrl(dut, addr, data):
@@ -151,11 +163,17 @@ async def test_indexed_overlay(dut):
     index 0 transparent."""
     cocotb.start_soon(Clock(dut.clk, 10, units="ns").start())
     await reset(dut)
-    await load_osd(dut)
+    await load_osd(dut)          # palette + canvas written to the BACK buffer
     master = 200
     await wr_ctrl(dut, A_ALPHA, master)
     await wr_ctrl(dut, A_ENABLE, 1)
 
+    # double-buffer: nothing drawn is visible until FLIP -> still passthrough
+    pre = await capture_frame(dut)
+    for (x, y), got in pre.items():
+        assert got == pattern(x, y), f"pre-flip not passthrough at ({x},{y}): {got}"
+
+    await flip(dut)
     frame = await capture_frame(dut)
     assert frame
     seen_color = seen_transparent = False
