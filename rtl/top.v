@@ -33,6 +33,8 @@ module top #(
     output wire        flip_done,
     // input mux select (INPUT_SELECT command)
     output wire [3:0]  mux_sel,
+    // backlight PWM (INVERTER / LED-driver dimming)
+    output wire        backlight,
     // output video stream
     output wire        out_de,
     output wire        out_hsync,
@@ -46,7 +48,7 @@ module top #(
     wire [7:0]     vr, vg, vb;
 
     wire           osd_enable;
-    wire [7:0]     osd_alpha, brightness, contrast;
+    wire [7:0]     osd_alpha, brightness, contrast, bl_duty;
 
     video_timing #(.CW(CW)) u_timing (
         .clk(clk), .rst(rst), .hsync(hsync), .vsync(vsync), .de(de), .x(x), .y(y));
@@ -57,7 +59,9 @@ module top #(
         .clk(clk), .rst(rst),
         .addr(ctrl_addr), .wdata(ctrl_wdata), .we(ctrl_we),
         .osd_enable(osd_enable), .osd_alpha(osd_alpha), .mux_sel(mux_sel),
-        .brightness(brightness), .contrast(contrast));
+        .brightness(brightness), .contrast(contrast), .backlight(bl_duty));
+
+    pwm u_pwm (.clk(clk), .rst(rst), .duty(bl_duty), .pwm(backlight));
 
     osd_compositor #(.CW(CW), .OSD_W(OSD_W), .OSD_H(OSD_H),
                      .ACTIVE_W(ACTIVE_W), .ACTIVE_H(ACTIVE_H), .FB_AW(FB_AW)) u_osd (

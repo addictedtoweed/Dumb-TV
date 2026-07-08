@@ -17,6 +17,7 @@ VERILOG_SOURCES = \
     rtl/video_timing.v \
     rtl/pattern_gen.v \
     rtl/ctrl_regs.v \
+    rtl/pwm.v \
     rtl/osd_fb_$(CANVAS).v \
     rtl/palette.v \
     rtl/osd_compositor.v \

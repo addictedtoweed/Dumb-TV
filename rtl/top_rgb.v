@@ -29,6 +29,7 @@ module top_rgb #(
     input  wire        rx,
     output wire        tx,
     output wire [3:0]  mux_sel,
+    output wire        backlight,
     output wire        out_de,
     output wire        out_hsync,
     output wire        out_vsync,
@@ -80,12 +81,14 @@ module top_rgb #(
         .flip_req(flip_req), .flip_done(flip_done));
 
     wire        osd_enable;
-    wire [7:0]  osd_alpha, brightness, contrast;
+    wire [7:0]  osd_alpha, brightness, contrast, bl_duty;
     ctrl_regs u_ctrl (
         .clk(sclk), .rst(rst),
         .addr(ctrl_addr), .wdata(ctrl_wdata), .we(ctrl_we),
         .osd_enable(osd_enable), .osd_alpha(osd_alpha), .mux_sel(mux_sel),
-        .brightness(brightness), .contrast(contrast));
+        .brightness(brightness), .contrast(contrast), .backlight(bl_duty));
+
+    pwm u_pwm (.clk(sclk), .rst(rst), .duty(bl_duty), .pwm(backlight));
 
     // ---------------- CDC: config sclk -> pclk ----------------
     localparam CFG_W = 1 + 8 + 8 + 8;    // enable + alpha + brightness + contrast

@@ -76,6 +76,7 @@ address gets a `NACK` with the reason code.
 | `0x28` | FLIP         | *(none)* — swap buffers at VSync; ACK **after** swap  |
 | `0x30` | BRIGHTNESS    | `level`(1) — picture brightness, 128 = neutral      |
 | `0x31` | CONTRAST      | `level`(1) — picture contrast, 128 = unity gain     |
+| `0x32` | BACKLIGHT     | `duty`(1) — backlight PWM, 0 = off .. 255 = full    |
 | `0x40` | INPUT_SELECT  | `sel`(1) — set the input mux select (0..15)         |
 
 ### Field meanings
@@ -267,6 +268,7 @@ class DumbTV:
         self._cmd(0x40, bytes([sel]))
     def brightness(self, level):   self._cmd(0x30, bytes([level]))   # 128 = neutral
     def contrast(self, level):     self._cmd(0x31, bytes([level]))   # 128 = unity
+    def backlight(self, duty):     self._cmd(0x32, bytes([duty]))    # 0..255 PWM
 
     def write_indices(self, indices, addr=0, chunk=512):
         for i in range(0, len(indices), chunk):
@@ -299,10 +301,14 @@ tv.flip()                                           # show it (swaps at VSync)
 ## 7. Planned (stage 2) — not yet implemented
 
 The full command set is implemented — OSD, double-buffering, glyphs/text/rects,
-picture controls, and the input mux. `BRIGHTNESS`/`CONTRAST` apply a pixel-math
-stage to the **video** before the OSD is blended on top (so menus stay a fixed
-brightness): `out = clamp((v - 128) * contrast / 128 + brightness)`, neutral at
-`brightness = 128, contrast = 128`.
+picture controls, backlight, and the input mux. `BRIGHTNESS`/`CONTRAST` apply a
+pixel-math stage to the **video** before the OSD is blended on top (so menus stay
+a fixed brightness): `out = clamp((v - 128) * contrast / 128 + brightness)`,
+neutral at `brightness = 128, contrast = 128`.
+
+`BACKLIGHT` sets an 8-bit PWM duty on the `backlight` output pin — drive a CCFL
+inverter's dimming input or an LED-driver PWM/EN. Defaults to full on so the
+panel is lit out of the box.
 
 ---
 
@@ -327,6 +333,7 @@ INT: little-endian    PIXEL: 4-bit palette index    ADDR: y*osd_w + x
 0x28 FLIP                           (swap at VSync; ACK after swap)
 0x30 BRIGHTNESS   level             (128 = neutral)
 0x31 CONTRAST     level             (128 = unity)
+0x32 BACKLIGHT    duty              (0=off .. 255=full)
 0x40 INPUT_SELECT sel               (set input mux 0..15)
 
 0x80 ACK cmd     0x81 NACK cmd err     0x82 INFO ...

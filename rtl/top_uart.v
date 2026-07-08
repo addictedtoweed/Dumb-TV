@@ -19,6 +19,7 @@ module top_uart #(
     input  wire        rx,
     output wire        tx,
     output wire [3:0]  mux_sel,
+    output wire        backlight,
     output wire        out_de,
     output wire        out_hsync,
     output wire        out_vsync,
@@ -58,13 +59,15 @@ module top_uart #(
         .flip_req(flip_req), .flip_done(flip_done));
 
     wire        osd_enable;
-    wire [7:0]  osd_alpha, brightness, contrast;
+    wire [7:0]  osd_alpha, brightness, contrast, bl_duty;
 
     ctrl_regs u_ctrl (
         .clk(clk), .rst(rst),
         .addr(ctrl_addr), .wdata(ctrl_wdata), .we(ctrl_we),
         .osd_enable(osd_enable), .osd_alpha(osd_alpha), .mux_sel(mux_sel),
-        .brightness(brightness), .contrast(contrast));
+        .brightness(brightness), .contrast(contrast), .backlight(bl_duty));
+
+    pwm u_pwm (.clk(clk), .rst(rst), .duty(bl_duty), .pwm(backlight));
 
     osd_compositor #(.CW(CW), .OSD_W(OSD_W), .OSD_H(OSD_H),
                      .ACTIVE_W(ACTIVE_W), .ACTIVE_H(ACTIVE_H), .FB_AW(FB_AW)) u_osd (

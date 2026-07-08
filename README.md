@@ -217,8 +217,9 @@ come from the canvas index + palette, not registers.
    is implemented.
 8. ~~**Input mux (`INPUT_SELECT`)**~~ — done: a serial command drives the
    `mux_sel` output pins (external DP/HDMI mux, or fabric RGB-source select).
-9. ~~**Picture controls**~~ — done: `BRIGHTNESS`/`CONTRAST` + a pixel-math stage
-   on the video before the OSD blend (menus stay a fixed brightness).
+9. ~~**Picture controls + backlight**~~ — done: `BRIGHTNESS`/`CONTRAST` (a
+   pixel-math stage on the video before the OSD blend) and `BACKLIGHT` (an 8-bit
+   PWM output pin for a CCFL inverter or LED-driver dimming).
 10. **On-board SERV RISC-V core** (future) — a tiny bit-serial RV32I core for
     out-of-the-box brains: IR remote learning + custom control. Drives the same
     `cmd_parser` over an *internal* UART bridge (a second command source beside

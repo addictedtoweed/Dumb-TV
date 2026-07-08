@@ -32,7 +32,7 @@ OP_FBW, OP_FBF, OP_PAL = 0x20, 0x21, 0x26
 OP_CLEAR, OP_FLIP = 0x27, 0x28
 OP_GUP, OP_GBLIT, OP_FRECT = 0x22, 0x23, 0x25
 OP_TEXT, OP_MUXSEL = 0x24, 0x40
-OP_BRIGHT, OP_CONTR = 0x30, 0x31
+OP_BRIGHT, OP_CONTR, OP_BL = 0x30, 0x31, 0x32
 RSP_ACK, RSP_NACK, RSP_INFO = 0x80, 0x81, 0x82
 
 
@@ -438,6 +438,24 @@ async def test_input_select(dut):
     cmd, pl = await recv_frame(dut, q); assert cmd == RSP_ACK
     await clks(dut, 5)
     assert int(dut.mux_sel.value) == 3, hex(int(dut.mux_sel.value))
+
+
+@cocotb.test()
+async def test_backlight(dut):
+    """BACKLIGHT sets the PWM duty; measure the duty cycle over one period."""
+    cocotb.start_soon(Clock(dut.clk, 10, units="ns").start())
+    await reset(dut)
+    q = start_monitor(dut)
+    for duty in (0, 64, 200, 255):
+        await send_frame(dut, OP_BL, bytes([duty]))
+        cmd, _ = await recv_frame(dut, q); assert cmd == RSP_ACK
+        await clks(dut, 2)
+        hi = 0
+        for _ in range(256):                 # one full 8-bit PWM period
+            await RisingEdge(dut.clk)
+            hi += int(dut.backlight.value)
+        expected = 256 if duty == 255 else duty
+        assert hi == expected, f"duty={duty}: high {hi} != {expected}"
 
 
 @cocotb.test()
