@@ -41,6 +41,21 @@ VERILOG_SOURCES = \
 TOPLEVEL ?= top
 MODULE   ?= test_compositor
 
+# The vendored SERV core is only pulled in for the serv_soc build, so its lint
+# doesn't affect the other suites.
+ifeq ($(TOPLEVEL),serv_soc)
+VERILOG_SOURCES += rtl/serv_soc.v \
+    $(wildcard rtl/serv/serv_top.v rtl/serv/serv_state.v rtl/serv/serv_decode.v \
+               rtl/serv/serv_immdec.v rtl/serv/serv_bufreg.v rtl/serv/serv_bufreg2.v \
+               rtl/serv/serv_ctrl.v rtl/serv/serv_alu.v rtl/serv/serv_rf_if.v \
+               rtl/serv/serv_mem_if.v rtl/serv/serv_csr.v rtl/serv/serv_aligner.v \
+               rtl/serv/serv_compdec.v rtl/serv/serv_rf_ram.v rtl/serv/serv_rf_ram_if.v) \
+    $(wildcard rtl/serv/servile*.v) \
+    rtl/serv/servant_mux.v rtl/serv/servant_timer.v rtl/serv/servant_gpio.v
+# SERV is Verilator-clean but uses different lint conventions; don't be fatal.
+EXTRA_ARGS += -Wno-fatal
+endif
+
 export PYTHONPATH := $(CURDIR)/tb:$(PYTHONPATH)
 
 # Width-expansion/truncation in ordinary arithmetic is benign here; don't let
