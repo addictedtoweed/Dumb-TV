@@ -27,7 +27,11 @@
 module top_serv #(
     parameter OSD_W        = 8,
     parameter OSD_H        = 4,
-    parameter CLKS_PER_BIT = 8,
+    parameter CLKS_PER_BIT = 8,        // host link baud (clk cycles / bit)
+    // Internal (SERV) link baud. The bit-serial core bit-bangs slowly, so its
+    // link runs far below the host's -- calibrated to the firmware's per-bit
+    // busy-loop (fw/dumbtv.h DUMBTV_BIT_LOOPS).
+    parameter INT_CLKS_PER_BIT = 640,
     parameter MEMSIZE      = 16384,
     parameter FB_AW        = $clog2(OSD_W*OSD_H),
     parameter FW_AW        = $clog2(MEMSIZE)
@@ -56,7 +60,7 @@ module top_serv #(
     wire        q;
     assign serv_q = q;
     wire [7:0] s1_data;  wire s1_valid;
-    uart_rx #(.CLKS_PER_BIT(CLKS_PER_BIT)) u_rx1 (
+    uart_rx #(.CLKS_PER_BIT(INT_CLKS_PER_BIT)) u_rx1 (
         .clk(clk), .rst(rst), .rx(q), .data(s1_data), .valid(s1_valid));
 
     // SERV cannot receive (GPIO is output-only): sink its response with a tx
