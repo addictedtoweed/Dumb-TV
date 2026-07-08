@@ -228,8 +228,12 @@ come from the canvas index + palette, not registers.
       `top_mux.v`): host + internal command sources share one parser.
     - ~~step 2: program RAM + firmware upload~~ — done (`fw_mem.v` 16 KB dual-port
       + `FW_HALT`/`FW_WRITE`/`FW_START`; core held in reset until loaded).
-    - next: drop in the SERV/Servant core on the RAM's core port + its internal
-      UART; then the IR GPIO + example firmware.
+    - ~~step 3a: vendor the SERV core~~ — done (`rtl/serv/`, ISC + Apache-2.0).
+    - ~~step 3b: host-writable Wishbone program RAM~~ — done (`serv_ram_hw.v`).
+    - ~~step 3c: `serv_soc` runs~~ — done: SERV executes host-loaded firmware
+      (PC advances) gated by `core_halt`; GPIO `q` = firmware-bit-banged UART.
+    - next: route `q` into `cmd_mux` source 1 (SERV drives the OSD); then a real
+      firmware (needs `riscv32-gcc`) that bit-bangs a command; then the IR GPIO.
 11. **Real I/O** — feed `rgb_in` from a real bridge chip (Lontium/TFP401) and
     drive the parallel-RGB output into an RGB-to-LVDS serializer, on the chosen
     prototype board. (No RTL change — the FPGA is parallel-RGB in and out.)
