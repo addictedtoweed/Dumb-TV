@@ -28,6 +28,7 @@ module top_rgb #(
     input  wire        rst,
     input  wire        rx,
     output wire        tx,
+    output wire [3:0]  mux_sel,
     output wire        out_de,
     output wire        out_hsync,
     output wire        out_vsync,
@@ -83,7 +84,7 @@ module top_rgb #(
     ctrl_regs u_ctrl (
         .clk(sclk), .rst(rst),
         .addr(ctrl_addr), .wdata(ctrl_wdata), .we(ctrl_we),
-        .osd_enable(osd_enable), .osd_alpha(osd_alpha));
+        .osd_enable(osd_enable), .osd_alpha(osd_alpha), .mux_sel(mux_sel));
 
     // ---------------- CDC: config sclk -> pclk ----------------
     localparam CFG_W = 1 + 8;    // enable + master alpha

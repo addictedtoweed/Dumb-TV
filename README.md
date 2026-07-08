@@ -211,13 +211,16 @@ come from the canvas index + palette, not registers.
 6. ~~**Double-buffered canvas + `CLEAR`/`FLIP`**~~ — done (flicker-free draw
    cycle; FLIP applied at VSync with ACK-after-swap, i.e. the config-CDC-at-vblank
    fix).
-7. ~~**Glyph toolkit (stage 2b)**~~ — done: `glyph_store.v` + blit engine +
-   `GLYPH_UPLOAD`/`GLYPH_BLIT`/`FILL_RECT`, drawing into the back buffer.
-   (`DRAW_TEXT` — a run of glyph blits — is the one remaining OSD command.)
-7. **Picture controls** — BRIGHTNESS/CONTRAST registers + a pixel-math stage
+7. ~~**Glyph toolkit (stage 2b/2c)**~~ — done: `glyph_store.v` + blit engine +
+   `GLYPH_UPLOAD`/`GLYPH_BLIT`/`DRAW_TEXT`/`FILL_RECT`. `DRAW_TEXT` maps a byte
+   to glyph slot `TEXT_BASE + char` (8-bit code page). The full OSD command set
+   is implemented.
+8. ~~**Input mux (`INPUT_SELECT`)**~~ — done: a serial command drives the
+   `mux_sel` output pins (external DP/HDMI mux, or fabric RGB-source select).
+9. **Picture controls** — BRIGHTNESS/CONTRAST registers + a pixel-math stage
    (opcodes reserved).
-8. **Real I/O** — feed `rgb_in` from a real bridge chip (Lontium/TFP401) and
-   drive the parallel-RGB output into an RGB-to-LVDS serializer, on the chosen
-   prototype board. (No RTL change — the FPGA is parallel-RGB in and out.)
+10. **Real I/O** — feed `rgb_in` from a real bridge chip (Lontium/TFP401) and
+    drive the parallel-RGB output into an RGB-to-LVDS serializer, on the chosen
+    prototype board. (No RTL change — the FPGA is parallel-RGB in and out.)
 
 See `docs/uart-protocol.md` for the host (Pi) serial protocol.

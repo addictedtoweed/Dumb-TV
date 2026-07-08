@@ -70,9 +70,11 @@ address gets a `NACK` with the reason code.
 | `0x21` | OSD_FB_FILL  | `addr`(2) `count`(2) `index`(1)                       |
 | `0x22` | GLYPH_UPLOAD | `slot`(1) + `GW*GH` index bytes (one 4-bit px/byte)   |
 | `0x23` | GLYPH_BLIT   | `slot`(1) `x`(2) `y`(2) — draw glyph at canvas (x,y)   |
+| `0x24` | DRAW_TEXT    | `x`(2) `y`(2) + string bytes (slot = TEXT_BASE + char)|
 | `0x25` | FILL_RECT    | `x`(2) `y`(2) `w`(2) `h`(2) `index`(1)                |
 | `0x27` | CLEAR        | *(optional `index`(1); default 0)* — wipe back buffer |
 | `0x28` | FLIP         | *(none)* — swap buffers at VSync; ACK **after** swap  |
+| `0x40` | INPUT_SELECT | `sel`(1) — set the input mux select (0..15)           |
 | `0x30` | BRIGHTNESS *(reserved)* | `level`(1)                                 |
 | `0x31` | CONTRAST *(reserved)*   | `level`(1)                                 |
 
@@ -167,9 +169,22 @@ Instead of re-uploading pixels, build the OSD from reusable pieces:
 - **`FILL_RECT`** fills a rectangle with one palette index — bars, backgrounds,
   underlines, progress meters.
 
-All three draw into the **back** buffer, so the flow stays `CLEAR` → glyphs /
-rects / writes → `FLIP`. (Text — `DRAW_TEXT` — is the one remaining planned
-command; until then, draw a string as a run of `GLYPH_BLIT`s at advancing x.)
+- **`DRAW_TEXT`** blits a whole string in one command: for each byte `c` it
+  blits glyph slot `TEXT_BASE + c` at advancing x. Load a **font** as a
+  contiguous block of glyphs starting at slot `TEXT_BASE` (the firmware default
+  is 0), and the byte values you send index it directly — full **8-bit** range
+  (a 256-glyph code page), not just 7-bit ASCII. Reserve the non-font slots for
+  icons.
+
+All of these draw into the **back** buffer, so the flow stays `CLEAR` → glyphs /
+text / rects / writes → `FLIP`.
+
+## Input mux — `INPUT_SELECT`
+
+`INPUT_SELECT sel` sets a small `mux_sel` register exposed as FPGA output pins.
+Use it to switch an external DP/HDMI mux, or to select between multiple RGB
+deserializers feeding the FPGA. It's just another serial command, so input
+switching is scriptable like everything else.
 
 ### Latency note
 
@@ -243,8 +258,13 @@ class DumbTV:
         self._cmd(0x22, bytes([slot]) + bytes(pixels))
     def glyph_blit(self, slot, x, y):
         self._cmd(0x23, bytes([slot]) + struct.pack("<HH", x, y))
+    def draw_text(self, x, y, s):                # s: bytes / str (8-bit chars)
+        b = s.encode("latin-1") if isinstance(s, str) else bytes(s)
+        self._cmd(0x24, struct.pack("<HH", x, y) + b)
     def fill_rect(self, x, y, w, h, index):
         self._cmd(0x25, struct.pack("<HHHH", x, y, w, h) + bytes([index]))
+    def input_select(self, sel):
+        self._cmd(0x40, bytes([sel]))
 
     def write_indices(self, indices, addr=0, chunk=512):
         for i in range(0, len(indices), chunk):
@@ -276,15 +296,15 @@ tv.flip()                                           # show it (swaps at VSync)
 
 ## 7. Planned (stage 2) — not yet implemented
 
-Double-buffering (`CLEAR`/`FLIP`) and the glyph/rect toolkit (`GLYPH_UPLOAD`,
-`GLYPH_BLIT`, `FILL_RECT`) are **done** (see §5). One command remains planned:
+The full OSD command set is implemented. Only the picture-control opcodes remain
+reserved:
 
-| Opcode | Name      | Payload (planned)                   |
-|--------|-----------|-------------------------------------|
-| `0x24` | DRAW_TEXT | `x`(2) `y`(2) + ASCII bytes         |
+| Opcode | Name       | Payload (reserved)  |
+|--------|------------|---------------------|
+| `0x30` | BRIGHTNESS | `level`(1)          |
+| `0x31` | CONTRAST   | `level`(1)          |
 
-`DRAW_TEXT` will blit a run of glyphs (slot = char code) at advancing x — a
-convenience over sending one `GLYPH_BLIT` per character.
+These need a pixel-math stage in the compositor (planned).
 
 ---
 
@@ -303,9 +323,11 @@ INT: little-endian    PIXEL: 4-bit palette index    ADDR: y*osd_w + x
 0x21 OSD_FB_FILL  addr count index                               -> back buffer
 0x22 GLYPH_UPLOAD slot pixels...    (GW*GH indices, one per byte)
 0x23 GLYPH_BLIT   slot x y                                       -> back buffer
+0x24 DRAW_TEXT    x y bytes...      (slot = TEXT_BASE + char)     -> back buffer
 0x25 FILL_RECT    x y w h index                                  -> back buffer
 0x27 CLEAR        [index]           (wipe back buffer)
 0x28 FLIP                           (swap at VSync; ACK after swap)
+0x40 INPUT_SELECT sel               (set input mux 0..15)
 
 0x80 ACK cmd     0x81 NACK cmd err     0x82 INFO ...
 err: 01 crc  02 len  03 unknown  04 range

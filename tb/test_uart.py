@@ -31,6 +31,7 @@ OP_EN, OP_ALPHA = 0x10, 0x12
 OP_FBW, OP_FBF, OP_PAL = 0x20, 0x21, 0x26
 OP_CLEAR, OP_FLIP = 0x27, 0x28
 OP_GUP, OP_GBLIT, OP_FRECT = 0x22, 0x23, 0x25
+OP_TEXT, OP_MUXSEL = 0x24, 0x40
 RSP_ACK, RSP_NACK, RSP_INFO = 0x80, 0x81, 0x82
 
 
@@ -336,6 +337,81 @@ async def test_fill_rect(dut):
             exp = (vr, vg, vb)
         assert got == exp, f"({x},{y}): {got} != {exp}"
     assert seen
+
+
+@cocotb.test()
+async def test_draw_text(dut):
+    """DRAW_TEXT blits a run of font glyphs (slot = TEXT_BASE + char) at
+    advancing x. TEXT_BASE defaults to 0, so char c -> glyph slot c."""
+    cocotb.start_soon(Clock(dut.clk, 10, units="ns").start())
+    await reset(dut)
+    q = start_monitor(dut)
+
+    def g1(gx, gy):
+        return 1 if gx == 1 else 0        # vertical bar (index 1)
+
+    def g2(gx, gy):
+        return 2 if gy == 1 else 0        # horizontal bar (index 2)
+
+    await send_frame(dut, OP_PAL, bytes([1, 255, 255, 0, 0]))
+    cmd, _ = await recv_frame(dut, q); assert cmd == RSP_ACK
+    await send_frame(dut, OP_PAL, bytes([2, 255, 0, 0, 255]))
+    cmd, _ = await recv_frame(dut, q); assert cmd == RSP_ACK
+    # font glyphs in slots 1 and 2 (char codes 1 and 2)
+    await send_frame(dut, OP_GUP, bytes([1]) + bytes([g1(x, y) for y in range(GH) for x in range(GW)]))
+    cmd, _ = await recv_frame(dut, q); assert cmd == RSP_ACK
+    await send_frame(dut, OP_GUP, bytes([2]) + bytes([g2(x, y) for y in range(GH) for x in range(GW)]))
+    cmd, _ = await recv_frame(dut, q); assert cmd == RSP_ACK
+
+    await send_frame(dut, OP_CLEAR, bytes([0]))
+    cmd, _ = await recv_frame(dut, q); assert cmd == RSP_ACK
+    # draw the two-char string "\x01\x02" at (0,0): glyph1 at x0, glyph2 at x=GW
+    await send_frame(dut, OP_TEXT, struct.pack("<HH", 0, 0) + bytes([1, 2]))
+    cmd, _ = await recv_frame(dut, q); assert cmd == RSP_ACK
+    await send_frame(dut, OP_ALPHA, bytes([255]))
+    cmd, _ = await recv_frame(dut, q); assert cmd == RSP_ACK
+    await send_frame(dut, OP_EN, bytes([1]))
+    cmd, _ = await recv_frame(dut, q); assert cmd == RSP_ACK
+    await send_frame(dut, OP_FLIP)
+    cmd, _ = await recv_frame(dut, q); assert cmd == RSP_ACK
+
+    PAL = {1: (255, 255, 0, 0), 2: (255, 0, 0, 255)}
+    master = 255
+
+    def canvas_of(cx, cy):
+        if cx < GW:          return g1(cx, cy)
+        elif cx < 2 * GW:    return g2(cx - GW, cy)
+        return 0
+
+    frame = await capture_frame(dut)
+    assert frame
+    seen1 = seen2 = False
+    for (x, y), got in frame.items():
+        vr, vg, vb = pattern(x, y)
+        cx, cy = scale(x, y)
+        idx = canvas_of(cx, cy)
+        if idx == 0:
+            exp = (vr, vg, vb)
+        else:
+            if idx == 1: seen1 = True
+            if idx == 2: seen2 = True
+            a, r, g, b = PAL[idx]
+            w = eff_alpha(a, master)
+            exp = (blend(vr, r, w), blend(vg, g, w), blend(vb, b, w))
+        assert got == exp, f"({x},{y}) idx={idx}: {got} != {exp}"
+    assert seen1 and seen2
+
+
+@cocotb.test()
+async def test_input_select(dut):
+    """INPUT_SELECT drives the mux_sel output register."""
+    cocotb.start_soon(Clock(dut.clk, 10, units="ns").start())
+    await reset(dut)
+    q = start_monitor(dut)
+    await send_frame(dut, OP_MUXSEL, bytes([3]))
+    cmd, pl = await recv_frame(dut, q); assert cmd == RSP_ACK
+    await clks(dut, 5)
+    assert int(dut.mux_sel.value) == 3, hex(int(dut.mux_sel.value))
 
 
 @cocotb.test()

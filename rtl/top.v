@@ -31,6 +31,8 @@ module top #(
     // double-buffer flip handshake
     input  wire        flip_req,
     output wire        flip_done,
+    // input mux select (INPUT_SELECT command)
+    output wire [3:0]  mux_sel,
     // output video stream
     output wire        out_de,
     output wire        out_hsync,
@@ -54,7 +56,7 @@ module top #(
     ctrl_regs u_ctrl (
         .clk(clk), .rst(rst),
         .addr(ctrl_addr), .wdata(ctrl_wdata), .we(ctrl_we),
-        .osd_enable(osd_enable), .osd_alpha(osd_alpha));
+        .osd_enable(osd_enable), .osd_alpha(osd_alpha), .mux_sel(mux_sel));
 
     osd_compositor #(.CW(CW), .OSD_W(OSD_W), .OSD_H(OSD_H),
                      .ACTIVE_W(ACTIVE_W), .ACTIVE_H(ACTIVE_H), .FB_AW(FB_AW)) u_osd (
