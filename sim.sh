@@ -14,6 +14,7 @@ cd "$(dirname "$0")"
 case "$*" in
     *top_uart*) : "${SIM_BUILD:=/tmp/dumbtv_build_uart}" ;;
     *top_rgb*)  : "${SIM_BUILD:=/tmp/dumbtv_build_rgb}" ;;
+    *top_mux*)  : "${SIM_BUILD:=/tmp/dumbtv_build_mux}" ;;
     *)          : "${SIM_BUILD:=/tmp/dumbtv_build_top}" ;;
 esac
 export SIM_BUILD

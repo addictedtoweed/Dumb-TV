@@ -49,7 +49,11 @@ module cmd_parser #(
     output reg [31:0]  pal_wdata,
     // double-buffer flip handshake (to/from compositor)
     output reg         flip_req,
-    input  wire        flip_done
+    input  wire        flip_done,
+    // command-mux hooks: rx_ready = can accept a byte this cycle;
+    // busy = a frame is in progress (not idle in S_SYNC)
+    output wire        rx_ready,
+    output wire        busy
 );
     // ---- opcodes ----
     localparam OP_PING = 8'h01, OP_INFO  = 8'h02,
@@ -159,6 +163,11 @@ module cmd_parser #(
     end endtask
 
     wire [15:0] len_full = {rx_data, len_lo};
+
+    // mux backpressure: the parser only consumes rx_data in the receive states.
+    assign rx_ready = (state == S_SYNC) || (state == S_CMD) || (state == S_LENL) ||
+                      (state == S_LENH) || (state == S_PAY)  || (state == S_CRC);
+    assign busy     = (state != S_SYNC);
 
     always @(posedge clk) begin
         if (rst) begin

@@ -29,7 +29,10 @@ VERILOG_SOURCES = \
     rtl/top_uart.v \
     rtl/sync2.v \
     rtl/rgb_in.v \
-    rtl/top_rgb.v
+    rtl/top_rgb.v \
+    rtl/fifo.v \
+    rtl/cmd_mux.v \
+    rtl/top_mux.v
 
 # Default target is the compositor pipeline. Run the UART suite with:
 #   make TOPLEVEL=top_uart MODULE=test_uart

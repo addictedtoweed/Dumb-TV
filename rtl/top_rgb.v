@@ -78,7 +78,8 @@ module top_rgb #(
         .ctrl_addr(ctrl_addr), .ctrl_wdata(ctrl_wdata), .ctrl_we(ctrl_we),
         .fb_we(fb_we), .fb_waddr(fb_waddr), .fb_wdata(fb_wdata),
         .pal_we(pal_we), .pal_waddr(pal_waddr), .pal_wdata(pal_wdata),
-        .flip_req(flip_req), .flip_done(flip_done));
+        .flip_req(flip_req), .flip_done(flip_done),
+        .rx_ready(), .busy());
 
     wire        osd_enable;
     wire [7:0]  osd_alpha, brightness, contrast, bl_duty;
