@@ -20,7 +20,10 @@
 module cmd_parser #(
     parameter OSD_W = 8,
     parameter OSD_H = 4,
-    parameter FB_AW = $clog2(OSD_W*OSD_H)
+    parameter FB_AW = $clog2(OSD_W*OSD_H),
+    parameter N_GLYPHS = 8,
+    parameter GW = 4,             // glyph width
+    parameter GH = 4              // glyph height
 )(
     input  wire        clk,
     input  wire        rst,
@@ -50,6 +53,7 @@ module cmd_parser #(
     // ---- opcodes ----
     localparam OP_PING = 8'h01, OP_INFO  = 8'h02,
                OP_EN   = 8'h10, OP_ALPHA = 8'h12,
+               OP_GUP  = 8'h22, OP_GBLIT = 8'h23, OP_FRECT = 8'h25,
                OP_FBW  = 8'h20, OP_FBF   = 8'h21, OP_PAL = 8'h26,
                OP_CLEAR = 8'h27, OP_FLIP = 8'h28;
     localparam RSP_ACK = 8'h80, RSP_NACK = 8'h81, RSP_INFO = 8'h82;
@@ -60,17 +64,20 @@ module cmd_parser #(
     localparam [15:0] MAX_W = 16'd1920, MAX_H = 16'd1080;
     localparam FW = FB_AW + 1;                       // canvas counter width
     localparam [FW-1:0] FB_DEPTH = OSD_W * OSD_H;
+    localparam GPIX = GW * GH;                       // pixels per glyph
+    localparam GAW  = $clog2(N_GLYPHS * GPIX);       // glyph-store address width
 
     // ---- states ----
     localparam S_SYNC=0, S_CMD=1, S_LENL=2, S_LENH=3, S_PAY=4, S_CRC=5,
-               S_EXEC=6, S_FILL=7, S_RLOAD=8, S_RWAIT=9, S_FLIPWAIT=10;
+               S_EXEC=6, S_FILL=7, S_RLOAD=8, S_RWAIT=9, S_FLIPWAIT=10,
+               S_BLIT_RD=11, S_BLIT_WR=12, S_FRECT=13;
     reg [3:0] state;
 
     reg [7:0]  cmd, crc, len_lo;
     reg [15:0] len, pay_idx;
     reg        bad_len;
     reg        range_err;
-    reg [7:0]  pbuf [0:7];         // payload buffer for small commands
+    reg [7:0]  pbuf [0:15];        // payload buffer for small commands
 
     // fb-write streaming
     reg [15:0] fb_addr;
@@ -82,6 +89,24 @@ module cmd_parser #(
 
     // flip handshake (flip_done crosses from the pixel domain)
     reg flip_done_s1, flip_done_s2, flip_done_prev;
+
+    // glyph store + blit engine
+    reg          gs_we;
+    reg [GAW-1:0] gs_waddr;
+    reg [3:0]    gs_wdata;
+    wire [3:0]   gs_rdata;
+    reg [GAW-1:0] g_up_base;       // slot base for GLYPH_UPLOAD
+    reg [GAW-1:0] b_base;          // slot base for GLYPH_BLIT
+    reg [15:0]   b_x, b_y;         // blit destination origin
+    reg [15:0]   gx, gy;          // glyph pixel counters
+    wire [GAW-1:0] gs_raddr = b_base + gy * GW + gx;   // combinational read addr
+    // fill-rect engine
+    reg [15:0]   fr_x, fr_y, fr_w, fr_h, rx, ry;
+    reg [3:0]    fr_idx;
+
+    glyph_store #(.N_GLYPHS(N_GLYPHS), .GW(GW), .GH(GH)) u_glyphs (
+        .clk(clk), .we(gs_we), .waddr(gs_waddr), .wdata(gs_wdata),
+        .raddr(gs_raddr), .rdata(gs_rdata));
 
     // response builder
     reg [7:0]  resp [0:15];
@@ -134,6 +159,7 @@ module cmd_parser #(
             ctrl_we  <= 1'b0;
             fb_we    <= 1'b0;
             pal_we   <= 1'b0;
+            gs_we    <= 1'b0;
             flip_req <= 1'b0;
             {flip_done_s2, flip_done_s1, flip_done_prev} <= 3'b000;
         end else begin
@@ -141,6 +167,7 @@ module cmd_parser #(
             ctrl_we  <= 1'b0;
             fb_we    <= 1'b0;
             pal_we   <= 1'b0;
+            gs_we    <= 1'b0;
 
             // sync flip_done (pixel domain) into this clock
             {flip_done_s2, flip_done_s1} <= {flip_done_s1, flip_done};
@@ -166,6 +193,9 @@ module cmd_parser #(
                         OP_EN, OP_ALPHA:  bad_len <= (len_full != 16'd1);
                         OP_CLEAR:         bad_len <= (len_full > 16'd1);   // 0 or 1 byte
                         OP_FBF, OP_PAL:   bad_len <= (len_full != 16'd5);
+                        OP_GBLIT:         bad_len <= (len_full != 16'd5);  // slot x y
+                        OP_FRECT:         bad_len <= (len_full != 16'd9);  // x y w h index
+                        OP_GUP:           bad_len <= (len_full != (16'd1 + GPIX)); // slot + pixels
                         OP_FBW:           bad_len <= (len_full < 16'd3);
                         default:          bad_len <= 1'b0; // unknown -> NACK in EXEC
                     endcase
@@ -187,8 +217,17 @@ module cmd_parser #(
                             end
                             fb_addr <= fb_addr + 1'b1;
                         end
+                    end else if (cmd == OP_GUP && !bad_len) begin
+                        if (pay_idx == 16'd0) begin            // slot byte
+                            if (rx_data < N_GLYPHS) g_up_base <= rx_data * GPIX;
+                            else                    range_err <= 1'b1;
+                        end else if (!range_err) begin         // one glyph pixel per byte
+                            gs_we    <= 1'b1;
+                            gs_waddr <= g_up_base + pay_idx[GAW-1:0] - 1'b1;
+                            gs_wdata <= rx_data[3:0];
+                        end
                     end else begin
-                        if (pay_idx < 16'd8) pbuf[pay_idx[2:0]] <= rx_data;
+                        if (pay_idx < 16'd16) pbuf[pay_idx[3:0]] <= rx_data;
                     end
                     pay_idx <= pay_idx + 1'b1;
                     if (pay_idx == len - 1) state <= S_CRC;
@@ -240,6 +279,31 @@ module cmd_parser #(
                             flip_req <= ~flip_req;
                             state <= S_FLIPWAIT;
                         end
+                        OP_GUP: begin                // glyph pixels streamed in S_PAY
+                            if (range_err) build_nack(cmd, ERR_RANGE);
+                            else           build_ack(cmd);
+                            state <= S_RLOAD;
+                        end
+                        OP_GBLIT: begin              // blit glyph `slot` at (x,y)
+                            if (pbuf[0] >= N_GLYPHS) begin
+                                build_nack(cmd, ERR_RANGE); state <= S_RLOAD;
+                            end else begin
+                                b_base <= pbuf[0] * GPIX;
+                                b_x    <= {pbuf[2], pbuf[1]};
+                                b_y    <= {pbuf[4], pbuf[3]};
+                                gx <= 16'd0; gy <= 16'd0;
+                                state <= S_BLIT_RD;
+                            end
+                        end
+                        OP_FRECT: begin             // fill rectangle with an index
+                            fr_x   <= {pbuf[1], pbuf[0]};
+                            fr_y   <= {pbuf[3], pbuf[2]};
+                            fr_w   <= {pbuf[5], pbuf[4]};
+                            fr_h   <= {pbuf[7], pbuf[6]};
+                            fr_idx <= pbuf[8][3:0];
+                            rx <= 16'd0; ry <= 16'd0;
+                            state <= S_FRECT;
+                        end
                         default: begin build_nack(cmd, ERR_UNK); state <= S_RLOAD; end
                     endcase
                 end
@@ -266,6 +330,41 @@ module cmd_parser #(
                     flip_done_prev <= flip_done_s2;
                     build_ack(OP_FLIP);
                     state <= S_RLOAD;
+                end
+                // ---------------- GLYPH_BLIT: glyph pixels -> back canvas ----------------
+                // gs_raddr is combinational from (gy,gx); this state lets the
+                // 1-clock glyph-store read settle before S_BLIT_WR uses it.
+                S_BLIT_RD: state <= S_BLIT_WR;
+                S_BLIT_WR: begin
+                    // gs_rdata valid now; write it if opaque and on-canvas (clip)
+                    if (gs_rdata != 4'd0 &&
+                        (b_x + gx) < OSD_W && (b_y + gy) < OSD_H) begin
+                        fb_we    <= 1'b1;
+                        fb_waddr <= (b_y + gy) * OSD_W + (b_x + gx);
+                        fb_wdata <= gs_rdata;
+                    end
+                    if (gx == GW-1) begin
+                        gx <= 16'd0;
+                        if (gy == GH-1) begin build_ack(OP_GBLIT); state <= S_RLOAD; end
+                        else            begin gy <= gy + 1'b1; state <= S_BLIT_RD; end
+                    end else begin
+                        gx <= gx + 1'b1; state <= S_BLIT_RD;
+                    end
+                end
+                // ---------------- FILL_RECT: fill a rectangle with an index ----------------
+                S_FRECT: begin
+                    if (ry >= fr_h) begin
+                        build_ack(OP_FRECT); state <= S_RLOAD;
+                    end else if (rx >= fr_w) begin
+                        rx <= 16'd0; ry <= ry + 1'b1;
+                    end else begin
+                        if ((fr_x + rx) < OSD_W && (fr_y + ry) < OSD_H) begin
+                            fb_we    <= 1'b1;
+                            fb_waddr <= (fr_y + ry) * OSD_W + (fr_x + rx);
+                            fb_wdata <= fr_idx;
+                        end
+                        rx <= rx + 1'b1;
+                    end
                 end
                 // ---------------- transmit response ----------------
                 S_RLOAD: if (!tx_busy) begin

@@ -215,8 +215,9 @@ come from the canvas index + palette, not registers.
 6. ~~**Double-buffered canvas + `CLEAR`/`FLIP`**~~ — done (flicker-free draw
    cycle; FLIP applied at VSync with ACK-after-swap, i.e. the config-CDC-at-vblank
    fix).
-7. **Glyph subsystem (stage 2b)** — glyph store + blit engine + glyph/text/fill
-   commands (see `docs/uart-protocol.md` §7), drawing into the back buffer.
+7. ~~**Glyph toolkit (stage 2b)**~~ — done: `glyph_store.v` + blit engine +
+   `GLYPH_UPLOAD`/`GLYPH_BLIT`/`FILL_RECT`, drawing into the back buffer.
+   (`DRAW_TEXT` — a run of glyph blits — is the one remaining OSD command.)
 7. **Picture controls** — BRIGHTNESS/CONTRAST registers + a pixel-math stage
    (opcodes reserved).
 8. **Real I/O** — feed `rgb_in` from a real bridge chip (Lontium/TFP401) and

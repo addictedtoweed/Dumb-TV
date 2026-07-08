@@ -23,6 +23,7 @@ VERILOG_SOURCES = \
     rtl/top.v \
     rtl/uart_rx.v \
     rtl/uart_tx.v \
+    rtl/glyph_store.v \
     rtl/cmd_parser.v \
     rtl/top_uart.v \
     rtl/sync2.v \

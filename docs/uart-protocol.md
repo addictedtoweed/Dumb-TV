@@ -68,6 +68,9 @@ address gets a `NACK` with the reason code.
 | `0x20` | OSD_FB_WRITE | `addr`(2) + N `index` bytes (low nibble = 4-bit index)|
 | `0x26` | PALETTE_SET  | `index`(1) `A`(1) `R`(1) `G`(1) `B`(1)                |
 | `0x21` | OSD_FB_FILL  | `addr`(2) `count`(2) `index`(1)                       |
+| `0x22` | GLYPH_UPLOAD | `slot`(1) + `GW*GH` index bytes (one 4-bit px/byte)   |
+| `0x23` | GLYPH_BLIT   | `slot`(1) `x`(2) `y`(2) — draw glyph at canvas (x,y)   |
+| `0x25` | FILL_RECT    | `x`(2) `y`(2) `w`(2) `h`(2) `index`(1)                |
 | `0x27` | CLEAR        | *(optional `index`(1); default 0)* — wipe back buffer |
 | `0x28` | FLIP         | *(none)* — swap buffers at VSync; ACK **after** swap  |
 | `0x30` | BRIGHTNESS *(reserved)* | `level`(1)                                 |
@@ -150,6 +153,24 @@ swapped, so the buffer you just released is safe to draw into next. (It's also a
 free ~60 Hz heartbeat.) A frame with a bad CRC mid-upload simply never gets
 flipped, so corruption is never shown.
 
+### Glyphs and rectangles
+
+Instead of re-uploading pixels, build the OSD from reusable pieces:
+
+- **`GLYPH_UPLOAD`** stores a small glyph (icon, arrow, character) into one of
+  the glyph slots — `GW × GH` 4-bit indices, one pixel per byte, row-major.
+  Upload each glyph once; `GET_INFO` reports the glyph size and slot count.
+- **`GLYPH_BLIT`** stamps glyph `slot` into the back buffer at canvas `(x, y)`.
+  Glyph pixels with index 0 are transparent (skipped), so non-rectangular shapes
+  compose cleanly. Off-canvas pixels are clipped. Blit the same glyph as many
+  times as you like — a blit is ~6 bytes.
+- **`FILL_RECT`** fills a rectangle with one palette index — bars, backgrounds,
+  underlines, progress meters.
+
+All three draw into the **back** buffer, so the flow stays `CLEAR` → glyphs /
+rects / writes → `FLIP`. (Text — `DRAW_TEXT` — is the one remaining planned
+command; until then, draw a string as a run of `GLYPH_BLIT`s at advancing x.)
+
 ### Latency note
 
 OSD updates are decoupled from the live video: the picture passes through at
@@ -218,6 +239,12 @@ class DumbTV:
         self._cmd(0x21, struct.pack("<HH", addr, count) + bytes([index]))
     def clear(self, index=0):  self._cmd(0x27, bytes([index]))
     def flip(self):            self._cmd(0x28)   # returns after the VSync swap
+    def glyph_upload(self, slot, pixels):        # pixels: bytes of 4-bit indices
+        self._cmd(0x22, bytes([slot]) + bytes(pixels))
+    def glyph_blit(self, slot, x, y):
+        self._cmd(0x23, bytes([slot]) + struct.pack("<HH", x, y))
+    def fill_rect(self, x, y, w, h, index):
+        self._cmd(0x25, struct.pack("<HHHH", x, y, w, h) + bytes([index]))
 
     def write_indices(self, indices, addr=0, chunk=512):
         for i in range(0, len(indices), chunk):
@@ -249,19 +276,15 @@ tv.flip()                                           # show it (swaps at VSync)
 
 ## 7. Planned (stage 2) — not yet implemented
 
-Double-buffering (`CLEAR`/`FLIP`) is **done** (see §5). The next firmware adds a
-glyph/blit toolkit. Opcodes are reserved here so host code can be written against
-the roadmap:
+Double-buffering (`CLEAR`/`FLIP`) and the glyph/rect toolkit (`GLYPH_UPLOAD`,
+`GLYPH_BLIT`, `FILL_RECT`) are **done** (see §5). One command remains planned:
 
-| Opcode | Name        | Payload (planned)                        |
-|--------|-------------|------------------------------------------|
-| `0x22` | GLYPH_UPLOAD| `slot`(1) + 4bpp bitmap                   |
-| `0x23` | GLYPH_BLIT  | `slot`(1) `x`(2) `y`(2) `pal`(1)          |
-| `0x24` | DRAW_TEXT   | `x`(2) `y`(2) `pal`(1) + ASCII bytes      |
-| `0x25` | FILL_RECT   | `x`(2) `y`(2) `w`(2) `h`(2) `index`(1)    |
+| Opcode | Name      | Payload (planned)                   |
+|--------|-----------|-------------------------------------|
+| `0x24` | DRAW_TEXT | `x`(2) `y`(2) + ASCII bytes         |
 
-These draw into the back buffer, so the `CLEAR` → draw → `FLIP` idiom extends to
-glyphs unchanged.
+`DRAW_TEXT` will blit a run of glyphs (slot = char code) at advancing x — a
+convenience over sending one `GLYPH_BLIT` per character.
 
 ---
 
@@ -278,6 +301,9 @@ INT: little-endian    PIXEL: 4-bit palette index    ADDR: y*osd_w + x
 0x26 PALETTE_SET index A R G B      (index 0 = transparent)
 0x20 OSD_FB_WRITE addr indices...   (one 4-bit index per byte)   -> back buffer
 0x21 OSD_FB_FILL  addr count index                               -> back buffer
+0x22 GLYPH_UPLOAD slot pixels...    (GW*GH indices, one per byte)
+0x23 GLYPH_BLIT   slot x y                                       -> back buffer
+0x25 FILL_RECT    x y w h index                                  -> back buffer
 0x27 CLEAR        [index]           (wipe back buffer)
 0x28 FLIP                           (swap at VSync; ACK after swap)
 

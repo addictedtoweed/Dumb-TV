@@ -30,6 +30,7 @@ OP_PING, OP_INFO = 0x01, 0x02
 OP_EN, OP_ALPHA = 0x10, 0x12
 OP_FBW, OP_FBF, OP_PAL = 0x20, 0x21, 0x26
 OP_CLEAR, OP_FLIP = 0x27, 0x28
+OP_GUP, OP_GBLIT, OP_FRECT = 0x22, 0x23, 0x25
 RSP_ACK, RSP_NACK, RSP_INFO = 0x80, 0x81, 0x82
 
 
@@ -236,6 +237,105 @@ async def test_clear_flip(dut):
     assert frame
     for (x, y), got in frame.items():
         assert got == (255, 0, 0), f"({x},{y}) not solid red: {got}"
+
+
+GW, GH = 4, 4          # glyph size (cmd_parser defaults)
+
+
+def glyph_pix(gx, gy):
+    return 1 if ((gx + gy) & 1) == 0 else 0     # index 1 (opaque) / 0 (transparent)
+
+
+@cocotb.test()
+async def test_glyph_blit(dut):
+    """Upload a glyph, CLEAR, blit it, FLIP; verify it lands (transparent px skip)."""
+    cocotb.start_soon(Clock(dut.clk, 10, units="ns").start())
+    await reset(dut)
+    q = start_monitor(dut)
+
+    await send_frame(dut, OP_PAL, bytes([1, 255, 100, 150, 200]))
+    cmd, _ = await recv_frame(dut, q); assert cmd == RSP_ACK
+    # glyph slot 1: one 4-bit index per byte, row-major (gy*GW + gx)
+    gbytes = bytes([glyph_pix(gx, gy) for gy in range(GH) for gx in range(GW)])
+    await send_frame(dut, OP_GUP, bytes([1]) + gbytes)
+    cmd, _ = await recv_frame(dut, q); assert cmd == RSP_ACK
+
+    gx0, gy0 = 2, 0
+    await send_frame(dut, OP_CLEAR, bytes([0]))
+    cmd, _ = await recv_frame(dut, q); assert cmd == RSP_ACK
+    await send_frame(dut, OP_GBLIT, bytes([1, gx0 & 0xFF, gx0 >> 8, gy0 & 0xFF, gy0 >> 8]))
+    cmd, _ = await recv_frame(dut, q); assert cmd == RSP_ACK
+    await send_frame(dut, OP_ALPHA, bytes([255]))
+    cmd, _ = await recv_frame(dut, q); assert cmd == RSP_ACK
+    await send_frame(dut, OP_EN, bytes([1]))
+    cmd, _ = await recv_frame(dut, q); assert cmd == RSP_ACK
+    await send_frame(dut, OP_FLIP)
+    cmd, _ = await recv_frame(dut, q); assert cmd == RSP_ACK
+
+    PAL1, master = (255, 100, 150, 200), 255
+
+    def canvas_of(cx, cy):
+        if gx0 <= cx < gx0 + GW and gy0 <= cy < gy0 + GH:
+            return glyph_pix(cx - gx0, cy - gy0)
+        return 0
+
+    frame = await capture_frame(dut)
+    assert frame
+    seen = False
+    for (x, y), got in frame.items():
+        vr, vg, vb = pattern(x, y)
+        cx, cy = scale(x, y)
+        if canvas_of(cx, cy) == 1:
+            seen = True
+            a, r, g, b = PAL1
+            w = eff_alpha(a, master)
+            exp = (blend(vr, r, w), blend(vg, g, w), blend(vb, b, w))
+        else:
+            exp = (vr, vg, vb)
+        assert got == exp, f"({x},{y}) cidx={canvas_of(cx, cy)}: {got} != {exp}"
+    assert seen
+
+
+@cocotb.test()
+async def test_fill_rect(dut):
+    """FILL_RECT a rectangle of one index; verify only that region is colored."""
+    cocotb.start_soon(Clock(dut.clk, 10, units="ns").start())
+    await reset(dut)
+    q = start_monitor(dut)
+
+    await send_frame(dut, OP_PAL, bytes([2, 255, 0, 255, 0]))     # index 2 = green
+    cmd, _ = await recv_frame(dut, q); assert cmd == RSP_ACK
+    await send_frame(dut, OP_CLEAR, bytes([0]))
+    cmd, _ = await recv_frame(dut, q); assert cmd == RSP_ACK
+    rx0, ry0, rw, rh = 1, 1, 3, 2
+    await send_frame(dut, OP_FRECT, struct.pack("<HHHH", rx0, ry0, rw, rh) + bytes([2]))
+    cmd, _ = await recv_frame(dut, q); assert cmd == RSP_ACK
+    await send_frame(dut, OP_ALPHA, bytes([255]))
+    cmd, _ = await recv_frame(dut, q); assert cmd == RSP_ACK
+    await send_frame(dut, OP_EN, bytes([1]))
+    cmd, _ = await recv_frame(dut, q); assert cmd == RSP_ACK
+    await send_frame(dut, OP_FLIP)
+    cmd, _ = await recv_frame(dut, q); assert cmd == RSP_ACK
+
+    master = 255
+
+    def in_rect(cx, cy):
+        return rx0 <= cx < rx0 + rw and ry0 <= cy < ry0 + rh
+
+    frame = await capture_frame(dut)
+    assert frame
+    seen = False
+    for (x, y), got in frame.items():
+        vr, vg, vb = pattern(x, y)
+        cx, cy = scale(x, y)
+        if in_rect(cx, cy):
+            seen = True
+            w = eff_alpha(255, master)
+            exp = (blend(vr, 0, w), blend(vg, 255, w), blend(vb, 0, w))
+        else:
+            exp = (vr, vg, vb)
+        assert got == exp, f"({x},{y}): {got} != {exp}"
+    assert seen
 
 
 @cocotb.test()
