@@ -1,0 +1,13 @@
+# dev-kit artifacts
+__pycache__/
+*.pyc
+out.png
+out.npy
+# user-supplied video streams
+vid_*.mp4
+vid_*.mkv
+vid_*.mov
+vid_*.avi
+vid_*.webm
+vid_*.m4v
+vid_*.y4m

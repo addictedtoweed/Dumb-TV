@@ -1,0 +1,141 @@
+"""Dumb-TV dev-kit sim -- interactive.
+
+A window showing the composited output: one of 16 looped video streams
+(vid_0..vid_15, or synthetic) with the OSD overlaid, driven through the real
+command protocol. Control it live from the keyboard, and/or from a host script
+over TCP (the serial path).
+
+    python devkit/app.py [--videos DIR] [--port 5555] [--size 1280x720]
+
+Keyboard:
+    0-9            select input 0-9            LEFT/RIGHT  cycle all 16 inputs
+    o              toggle OSD on/off           d           draw a demo OSD panel
+    c              clear the OSD               [ / ]       brightness - / +
+    ; / '          backlight  - / +            , / .       contrast   - / +
+    ESC / q        quit
+
+Serial path: connect a TCP client to localhost:5555 and send framed commands
+(A5 | cmd | len16 | payload | crc8); responses come back the same way. See
+host/dumbtv.py for the framing (point it at a socket, or reuse protocol.py).
+"""
+
+import argparse
+import os
+import struct
+import sys
+
+sys.path.insert(0, os.path.dirname(__file__))
+import numpy as np                                                      # noqa: E402
+from dumbtv_sim import OsdModel, Device, VideoBank, compositor          # noqa: E402
+from dumbtv_sim import protocol as P                                    # noqa: E402
+from dumbtv_sim.serialbridge import SerialBridge                        # noqa: E402
+
+
+def demo_osd(send, osd):
+    """Send a small demo overlay through the protocol (panel + bars)."""
+    send(P.OP_PAL, bytes([1, 255, 255, 255, 255]))     # white
+    send(P.OP_PAL, bytes([2, 150, 30, 40, 120]))       # translucent navy
+    send(P.OP_PAL, bytes([3, 255, 250, 190, 40]))      # amber
+    send(P.OP_PAL, bytes([4, 255, 40, 220, 180]))      # teal
+    send(P.OP_EN, bytes([1]))
+    send(P.OP_ALPHA, bytes([255]))
+    send(P.OP_CLEAR, bytes([0]))
+    W, H = osd.OSD_W, osd.OSD_H
+    send(P.OP_FRECT, struct.pack("<HHHH", 6, 6, W - 12, H - 12) + bytes([2]))
+    send(P.OP_FRECT, struct.pack("<HHHH", 6, 6, W - 12, 8) + bytes([3]))
+    send(P.OP_FRECT, struct.pack("<HHHH", 6, 6, W - 12, 1) + bytes([1]))
+    send(P.OP_FRECT, struct.pack("<HHHH", 6, H - 7, W - 12, 1) + bytes([1]))
+    send(P.OP_FRECT, struct.pack("<HHHH", 12, H - 16, (W - 24) * 2 // 3, 3) + bytes([4]))
+    send(P.OP_FLIP)
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--videos", default=os.path.dirname(__file__))
+    ap.add_argument("--port", type=int, default=5555)
+    ap.add_argument("--size", default="1280x720")
+    ap.add_argument("--canvas", default="160x90")
+    args = ap.parse_args()
+    W, H = (int(v) for v in args.size.lower().split("x"))
+    cw, ch = (int(v) for v in args.canvas.lower().split("x"))
+
+    import pygame
+    pygame.init()
+    screen = pygame.display.set_mode((W, H))
+    pygame.display.set_caption("Dumb-TV dev-kit sim")
+    font = pygame.font.SysFont("monospace", 16)
+    clock = pygame.time.Clock()
+
+    osd = OsdModel(osd_w=cw, osd_h=ch)
+    dev = Device(osd)
+    bank = VideoBank(directory=args.videos, size=(W, H))
+    bridge = SerialBridge(port=args.port)
+
+    def send(cmd, payload=b""):
+        dev.feed(P.build_frame(cmd, payload))
+
+    print(f"listening for host commands on tcp://127.0.0.1:{args.port}")
+    print(f"video decoding: {'opencv' if bank.have_cv2 else 'synthetic (no opencv)'}")
+
+    tick = 0
+    running = True
+    while running:
+        # --- serial path: apply host commands, return responses ---
+        data = bridge.poll()
+        if data:
+            bridge.send(dev.feed(data))
+
+        # --- keyboard ---
+        for e in pygame.event.get():
+            if e.type == pygame.QUIT:
+                running = False
+            elif e.type == pygame.KEYDOWN:
+                k = e.key
+                if k in (pygame.K_ESCAPE, pygame.K_q):
+                    running = False
+                elif pygame.K_0 <= k <= pygame.K_9:
+                    send(P.OP_MUXSEL, bytes([k - pygame.K_0]))
+                elif k == pygame.K_RIGHT:
+                    send(P.OP_MUXSEL, bytes([(osd.mux_sel + 1) & 15]))
+                elif k == pygame.K_LEFT:
+                    send(P.OP_MUXSEL, bytes([(osd.mux_sel - 1) & 15]))
+                elif k == pygame.K_o:
+                    send(P.OP_EN, bytes([0 if osd.osd_enable else 1]))
+                elif k == pygame.K_d:
+                    demo_osd(send, osd)
+                elif k == pygame.K_c:
+                    send(P.OP_CLEAR, bytes([0])); send(P.OP_FLIP)
+                elif k == pygame.K_LEFTBRACKET:
+                    send(P.OP_BRIGHT, bytes([max(0, osd.brightness - 8)]))
+                elif k == pygame.K_RIGHTBRACKET:
+                    send(P.OP_BRIGHT, bytes([min(255, osd.brightness + 8)]))
+                elif k == pygame.K_SEMICOLON:
+                    send(P.OP_BL, bytes([max(0, osd.backlight - 16)]))
+                elif k == pygame.K_QUOTE:
+                    send(P.OP_BL, bytes([min(255, osd.backlight + 16)]))
+                elif k == pygame.K_COMMA:
+                    send(P.OP_CONTR, bytes([max(0, osd.contrast - 8)]))
+                elif k == pygame.K_PERIOD:
+                    send(P.OP_CONTR, bytes([min(255, osd.contrast + 8)]))
+
+        # --- render: video -> composite -> window ---
+        video = bank.frame(osd.mux_sel, tick)
+        out = compositor.compose(video, osd)
+        # numpy HxWx3 -> pygame surface (WxH)
+        surf = pygame.surfarray.make_surface(np.transpose(out, (1, 0, 2)))
+        screen.blit(surf, (0, 0))
+
+        hud = (f"input {osd.mux_sel:2d} [{bank.sources[osd.mux_sel]}]  "
+               f"osd {'on' if osd.osd_enable else 'off'}  "
+               f"bright {osd.brightness} contr {osd.contrast} bl {osd.backlight}")
+        screen.blit(font.render(hud, True, (255, 255, 0), (0, 0, 0)), (6, H - 22))
+        pygame.display.flip()
+        tick += 1
+        clock.tick(30)
+
+    bridge.close()
+    pygame.quit()
+
+
+if __name__ == "__main__":
+    main()
