@@ -240,7 +240,12 @@ come from the canvas index + palette, not registers.
     - ~~step 4: IR input~~ — done: bidirectional GPIO (write = UART out, read =
       CDC-synced IR pin); `fw/ir_remote.c` decodes an IR press and `tb/test_serv_ir`
       proves a driven 2-burst press → `input_select(2)` (IR → GPIO → decode →
-      command). Next: a real NEC/RC5 decoder + true remote-learning firmware.
+      command).
+    - ~~step 5: NEC decoder + learning~~ — done: `fw/nec_remote.c` decodes the NEC
+      protocol (self-calibrating its threshold from the leader) and learns/matches
+      a code; `tb/test_serv_nec` drives two NEC frames and proves learn-then-match
+      → `mux_sel=2`. The SoC now boots host firmware, drives the OSD, and reacts to
+      a real IR remote — all verified in sim.
 11. **Real I/O** — feed `rgb_in` from a real bridge chip (Lontium/TFP401) and
     drive the parallel-RGB output into an RGB-to-LVDS serializer, on the chosen
     prototype board. (No RTL change — the FPGA is parallel-RGB in and out.)

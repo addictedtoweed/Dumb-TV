@@ -18,7 +18,8 @@ Everything else here is one-time boilerplate you don't touch:
 |------|-----------|
 | `dumbtv.h`  | the SDK — command API + software-UART + IR read + CRC (include this) |
 | `example.c` | a starting-point `main()` — copy it |
-| `ir_remote.c` | example: read the IR receiver, map a press to a command |
+| `ir_remote.c` | example: count IR bursts in a press → pick an input |
+| `nec_remote.c` | example: decode the NEC IR protocol + learn/match a code |
 | `start.S`   | crt0 (sets stack, zeroes bss, calls main) |
 | `dumbtv.ld` | linker script (16 KB RAM at address 0) |
 | `build.sh`  | one command: source → `.elf` + `.bin` |
@@ -76,10 +77,14 @@ high, active low — e.g. a TSOP38238). So `dumbtv_ir_read()` gives you the IR p
 while (dumbtv_ir_read() == 1) { }   // wait for a button (line goes active-low)
 ```
 
-`ir_remote.c` is a worked example: it counts the IR bursts in a press and does
-`input_select(count)`. Decoding a real protocol (NEC/RC5) or true remote-learning
-builds on the same read loop by *timing* marks/spaces instead of just counting
-edges.
+Two worked examples:
+- `ir_remote.c` — counts the IR bursts in a press and does `input_select(count)`
+  (a simple protocol-agnostic starting point).
+- `nec_remote.c` — decodes the real **NEC** protocol (leader + 32 bits) and
+  *learns*: it stores the first code, then acts when that code repeats. It
+  self-calibrates its bit threshold from the measured leader, so it's clock- and
+  scale-independent. Extend the table for a full learn-N-buttons remote; RC5
+  (Manchester) is a similar timing loop.
 
 ## Timing (important on real hardware)
 
