@@ -1,0 +1,5 @@
+# Build artifacts. firmware.bin is committed as the checked-in demo image
+# (tiny, regenerable via build.sh) so tb/test_serv_fw runs without a toolchain.
+*.elf
+*.o
+*.map

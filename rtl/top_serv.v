@@ -30,8 +30,9 @@ module top_serv #(
     parameter CLKS_PER_BIT = 8,        // host link baud (clk cycles / bit)
     // Internal (SERV) link baud. The bit-serial core bit-bangs slowly, so its
     // link runs far below the host's -- calibrated to the firmware's per-bit
-    // busy-loop (fw/dumbtv.h DUMBTV_BIT_LOOPS).
-    parameter INT_CLKS_PER_BIT = 640,
+    // busy-loop (fw/dumbtv.h DUMBTV_BIT_LOOPS=24 measures ~9.8k clk/bit in sim;
+    // use the measured minimum so the receiver samples inside every bit).
+    parameter INT_CLKS_PER_BIT = 9762,
     parameter MEMSIZE      = 16384,
     parameter FB_AW        = $clog2(OSD_W*OSD_H),
     parameter FW_AW        = $clog2(MEMSIZE)

@@ -232,8 +232,12 @@ come from the canvas index + palette, not registers.
     - ~~step 3b: host-writable Wishbone program RAM~~ — done (`serv_ram_hw.v`).
     - ~~step 3c: `serv_soc` runs~~ — done: SERV executes host-loaded firmware
       (PC advances) gated by `core_halt`; GPIO `q` = firmware-bit-banged UART.
-    - next: route `q` into `cmd_mux` source 1 (SERV drives the OSD); then a real
-      firmware (needs `riscv32-gcc`) that bit-bangs a command; then the IR GPIO.
+    - ~~step 3d: `top_serv`~~ — done: `q` routed into `cmd_mux` source 1, so the
+      core drives the OSD over the same protocol as the host.
+    - ~~step 3e: real firmware~~ — done: the `fw/` SDK builds a RISC-V image that
+      bit-bangs a command frame; `tb/test_serv_fw` proves the running core drives
+      `mux_sel` end-to-end (firmware → GPIO → internal UART → mux → parser).
+    - next: the IR-receiver GPIO input + example remote-learning firmware.
 11. **Real I/O** — feed `rgb_in` from a real bridge chip (Lontium/TFP401) and
     drive the parallel-RGB output into an RGB-to-LVDS serializer, on the chosen
     prototype board. (No RTL change — the FPGA is parallel-RGB in and out.)
