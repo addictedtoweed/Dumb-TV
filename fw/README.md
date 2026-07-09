@@ -20,6 +20,7 @@ Everything else here is one-time boilerplate you don't touch:
 | `example.c` | a starting-point `main()` — copy it |
 | `ir_remote.c` | example: count IR bursts in a press → pick an input |
 | `nec_remote.c` | example: decode the NEC IR protocol + learn/match a code |
+| `rc5_remote.c` | example: decode RC5 (Manchester) + learn/match a code |
 | `start.S`   | crt0 (sets stack, zeroes bss, calls main) |
 | `dumbtv.ld` | linker script (16 KB RAM at address 0) |
 | `build.sh`  | one command: source → `.elf` + `.bin` |
@@ -83,8 +84,11 @@ Two worked examples:
 - `nec_remote.c` — decodes the real **NEC** protocol (leader + 32 bits) and
   *learns*: it stores the first code, then acts when that code repeats. It
   self-calibrates its bit threshold from the measured leader, so it's clock- and
-  scale-independent. Extend the table for a full learn-N-buttons remote; RC5
-  (Manchester) is a similar timing loop.
+  scale-independent.
+- `rc5_remote.c` — decodes **RC5** (Philips, Manchester/bi-phase, 14 bits) by
+  measuring edge intervals (re-syncing on every edge, so no timing drift) and
+  learns/matches the same way. Between them these cover most consumer remotes;
+  extend the learn logic to a table for a full learn-N-buttons universal remote.
 
 ## Timing (important on real hardware)
 

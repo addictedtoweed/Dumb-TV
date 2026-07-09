@@ -246,6 +246,9 @@ come from the canvas index + palette, not registers.
       a code; `tb/test_serv_nec` drives two NEC frames and proves learn-then-match
       → `mux_sel=2`. The SoC now boots host firmware, drives the OSD, and reacts to
       a real IR remote — all verified in sim.
+    - ~~step 6: RC5 (Manchester) decoder~~ — done: `fw/rc5_remote.c` decodes RC5
+      bi-phase via edge-interval reconstruction; `tb/test_serv_rc5` proves
+      learn-then-match → `mux_sel=2`. NEC + RC5 cover most consumer remotes.
 11. **Real I/O** — feed `rgb_in` from a real bridge chip (Lontium/TFP401) and
     drive the parallel-RGB output into an RGB-to-LVDS serializer, on the chosen
     prototype board. (No RTL change — the FPGA is parallel-RGB in and out.)

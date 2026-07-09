@@ -114,8 +114,8 @@ async def upload_and_run(dut, fw_bin=FW_BIN):
     q = deque()
     cocotb.start_soon(_monitor(dut, q))
 
-    if not os.path.exists(fw_bin) or os.path.getsize(fw_bin) == 0:
-        raise cocotb.result.SkipTest(f"{fw_bin} missing -- run fw/build.sh")
+    assert os.path.exists(fw_bin) and os.path.getsize(fw_bin) > 0, \
+        f"{fw_bin} missing -- run fw/build.sh"
     with open(fw_bin, "rb") as f:
         blob = f.read()
 
