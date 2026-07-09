@@ -100,11 +100,13 @@ async def recv_ack(dut, q):
     return payload
 
 
-async def upload_and_run(dut):
-    """Reset, upload fw/firmware.bin over the host link (reading each ACK so the
-    host paces itself), release the core."""
+async def upload_and_run(dut, fw_bin=FW_BIN):
+    """Reset, upload a firmware .bin over the host link (reading each ACK so the
+    host paces itself -- unpaced uploads desync the parser and never clear
+    core_halt), release the core."""
     cocotb.start_soon(Clock(dut.clk, 10, units="ns").start())
     dut.rx.value = 1
+    dut.ir_in.value = 1           # IR receiver idles high
     dut.rst.value = 1
     await clks(dut, 20)
     dut.rst.value = 0
@@ -112,9 +114,9 @@ async def upload_and_run(dut):
     q = deque()
     cocotb.start_soon(_monitor(dut, q))
 
-    if not os.path.exists(FW_BIN) or os.path.getsize(FW_BIN) == 0:
-        raise cocotb.result.SkipTest("fw/firmware.bin missing -- run fw/build.sh")
-    with open(FW_BIN, "rb") as f:
+    if not os.path.exists(fw_bin) or os.path.getsize(fw_bin) == 0:
+        raise cocotb.result.SkipTest(f"{fw_bin} missing -- run fw/build.sh")
+    with open(fw_bin, "rb") as f:
         blob = f.read()
 
     await send_frame(dut, OP_FWHALT);  await recv_ack(dut, q)

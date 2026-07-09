@@ -104,6 +104,7 @@ async def recv_frame(dut, q):
 
 async def reset(dut):
     dut.rx.value = 1
+    dut.ir_in.value = 1        # IR receiver idles high
     dut.rst.value = 1
     await clks(dut, 20)
     dut.rst.value = 0

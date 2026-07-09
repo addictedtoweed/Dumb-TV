@@ -29,6 +29,13 @@
  */
 #define DUMBTV_GPIO (*(volatile unsigned int *)0x40000000u)
 
+/* The GPIO is bidirectional: WRITING bit 0 drives the serial-out line (the
+ * software UART below); READING bit 0 returns the consumer-IR receiver input
+ * (idle high, active low -- e.g. a TSOP38238 demodulator). So the same address
+ * is "UART out" on write and "IR in" on read. */
+static inline unsigned int dumbtv_ir_read(void)   /* 1 = idle, 0 = carrier/mark */
+{ return DUMBTV_GPIO & 1u; }
+
 /* ---- bit-bang UART timing ----------------------------------------------
  * Each UART bit is held for DUMBTV_BIT_LOOPS iterations of a calibrated busy
  * loop. This MUST make the bit period match the FPGA receiver's CLKS_PER_BIT

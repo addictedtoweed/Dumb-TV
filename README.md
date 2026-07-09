@@ -237,7 +237,10 @@ come from the canvas index + palette, not registers.
     - ~~step 3e: real firmware~~ — done: the `fw/` SDK builds a RISC-V image that
       bit-bangs a command frame; `tb/test_serv_fw` proves the running core drives
       `mux_sel` end-to-end (firmware → GPIO → internal UART → mux → parser).
-    - next: the IR-receiver GPIO input + example remote-learning firmware.
+    - ~~step 4: IR input~~ — done: bidirectional GPIO (write = UART out, read =
+      CDC-synced IR pin); `fw/ir_remote.c` decodes an IR press and `tb/test_serv_ir`
+      proves a driven 2-burst press → `input_select(2)` (IR → GPIO → decode →
+      command). Next: a real NEC/RC5 decoder + true remote-learning firmware.
 11. **Real I/O** — feed `rgb_in` from a real bridge chip (Lontium/TFP401) and
     drive the parallel-RGB output into an RGB-to-LVDS serializer, on the chosen
     prototype board. (No RTL change — the FPGA is parallel-RGB in and out.)

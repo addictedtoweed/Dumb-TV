@@ -30,6 +30,7 @@ async def test_core_runs(dut):
     cocotb.start_soon(Clock(dut.clk, 10, units="ns").start())
     dut.rst.value = 1
     dut.core_halt.value = 1
+    dut.ir_in.value = 1
     dut.i_host_we.value = 0
     dut.i_host_adr.value = 0
     dut.i_host_dat.value = 0

@@ -25,6 +25,9 @@ module serv_soc #(
     input  wire        i_host_we,
     input  wire [AW-1:0] i_host_adr,
     input  wire [7:0]  i_host_dat,
+    // consumer-IR receiver input (e.g. TSOP38238, idle high, active low). The
+    // firmware reads it at the GPIO address (bit 0) to learn/decode remotes.
+    input  wire        ir_in,
     // firmware-bit-banged UART TX (to the internal command link)
     output wire        q,
     // debug taps
@@ -60,6 +63,14 @@ module serv_soc #(
     assign dbg_mem_adr = wb_mem_adr;
     assign dbg_mem_stb = wb_mem_stb;
 
+    // CDC-sync the async IR pin into the core clock domain. Reads of the GPIO
+    // address return this (bit 0); writes still drive the TX pin q -- a
+    // bidirectional GPIO (read = IR in, write = UART out). Idle high.
+    reg [1:0] ir_ff;
+    always @(posedge clk)
+        ir_ff <= rst ? 2'b11 : {ir_ff[0], ir_in};
+    wire ir_sync = ir_ff[1];
+
     servant_mux servant_mux (
         .i_clk (clk), .i_rst (core_rst),
         .i_wb_cpu_adr (wb_ext_adr), .i_wb_cpu_dat (wb_ext_dat),
@@ -67,7 +78,7 @@ module serv_soc #(
         .i_wb_cpu_cyc (wb_ext_stb), .o_wb_cpu_rdt (wb_ext_rdt),
         .o_wb_cpu_ack (wb_ext_ack),
         .o_wb_gpio_dat (wb_gpio_dat), .o_wb_gpio_we (wb_gpio_we),
-        .o_wb_gpio_cyc (wb_gpio_stb), .i_wb_gpio_rdt (wb_gpio_rdt),
+        .o_wb_gpio_cyc (wb_gpio_stb), .i_wb_gpio_rdt (ir_sync),
         .o_wb_timer_dat (wb_timer_dat), .o_wb_timer_we (wb_timer_we),
         .o_wb_timer_cyc (wb_timer_stb), .i_wb_timer_rdt (wb_timer_rdt));
 

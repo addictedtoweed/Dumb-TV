@@ -41,6 +41,7 @@ module top_serv #(
     input  wire        rst,
     input  wire        rx,          // host link
     output wire        tx,
+    input  wire        ir_in,       // consumer-IR receiver (idle high, active low)
     output wire [3:0]  mux_sel,
     // debug taps (let a test watch the core come alive)
     output wire        core_rst,
@@ -116,6 +117,7 @@ module top_serv #(
     serv_soc #(.MEMSIZE(MEMSIZE)) u_serv (
         .clk(clk), .rst(rst), .core_halt(core_halt_w),
         .i_host_we(fw_we), .i_host_adr(fw_waddr), .i_host_dat(fw_wdata),
+        .ir_in(ir_in),
         .q(q),
         .dbg_mem_adr(dbg_mem_adr), .dbg_mem_stb(dbg_mem_stb));
 endmodule

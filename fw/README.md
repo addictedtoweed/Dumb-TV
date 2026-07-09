@@ -16,8 +16,9 @@ Everything else here is one-time boilerplate you don't touch:
 
 | file | what it is |
 |------|-----------|
-| `dumbtv.h`  | the SDK — command API + software-UART + CRC (include this) |
+| `dumbtv.h`  | the SDK — command API + software-UART + IR read + CRC (include this) |
 | `example.c` | a starting-point `main()` — copy it |
+| `ir_remote.c` | example: read the IR receiver, map a press to a command |
 | `start.S`   | crt0 (sets stack, zeroes bss, calls main) |
 | `dumbtv.ld` | linker script (16 KB RAM at address 0) |
 | `build.sh`  | one command: source → `.elf` + `.bin` |
@@ -63,8 +64,22 @@ int main(void) {
 Available calls: `dumbtv_input_select`, `dumbtv_enable`, `dumbtv_alpha`,
 `dumbtv_brightness`, `dumbtv_contrast`, `dumbtv_backlight`, `dumbtv_clear`,
 `dumbtv_flip`, `dumbtv_ping`, plus `dumbtv_send_frame()` for any opcode. The core
-is transmit-only (Servant's GPIO is output-only), so commands are fire-and-forget
-— it doesn't read ACKs.
+sends commands fire-and-forget — it doesn't read ACKs back.
+
+## Reading the IR receiver
+
+The GPIO is **bidirectional**: writing bit 0 drives the command line (the
+software UART above); reading it returns the consumer-IR receiver input (idle
+high, active low — e.g. a TSOP38238). So `dumbtv_ir_read()` gives you the IR pin:
+
+```c
+while (dumbtv_ir_read() == 1) { }   // wait for a button (line goes active-low)
+```
+
+`ir_remote.c` is a worked example: it counts the IR bursts in a press and does
+`input_select(count)`. Decoding a real protocol (NEC/RC5) or true remote-learning
+builds on the same read loop by *timing* marks/spaces instead of just counting
+edges.
 
 ## Timing (important on real hardware)
 
