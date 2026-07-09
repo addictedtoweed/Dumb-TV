@@ -67,13 +67,32 @@ python devkit/selftest.py           # drives the OSD, writes devkit/out.png
 | `dumbtv_sim/device.py` | byte-stream → frames → OSD (both host and core feed this) |
 | `dumbtv_sim/serialbridge.py` | TCP server for host control |
 | `app.py` | interactive pygame front-end |
-| `dumbtv_sim/riscv.py` | **(Phase B)** RV32I emulator: run the on-board firmware, IR learning from the keyboard |
+| `dumbtv_sim/riscv.py` | RV32I emulator: runs the on-board firmware; its bit-banged UART drives the OSD |
+| `dumbtv_sim/ir.py` | synthesizes NEC/RC5 IR waveforms into the core's IR pin (keyboard remote) |
+
+## On-board core (run real firmware)
+
+```sh
+python devkit/app.py --firmware fw/nec_remote.bin
+```
+
+The RISC-V emulator runs the same `.bin` the FPGA's SERV core would; its
+bit-banged UART is decoded and drives the OSD. Press `z` / `x` to fire two
+different NEC remote codes at its IR pin — with the learning firmware, `z z`
+learns then matches (→ input 2), `z x` learns z then sees a new code (→ input 1).
+`r` resets the core. Swap in `fw/rc5_remote.bin` for RC5.
+
+Headless regression:
+
+```sh
+python devkit/test_emulator.py      # runs firmware.bin / nec / rc5 on the emulator
+```
 
 ## Status
 
 - **Phase A (done):** serial + keyboard control of the OSD over 16 muxed video
   streams; verified headless (`selftest.py`).
-- **Phase B (next):** a pure-Python RV32I emulator runs the actual `fw/*.bin`;
+- **Phase B (done):** a pure-Python RV32I emulator runs the actual `fw/*.bin`;
   its bit-banged UART drives the OSD, and keyboard-synthesized NEC/RC5 frames on
   its IR pin exercise the remote-learning firmware — the "internal processor"
-  path.
+  path. Verified headless (`test_emulator.py`).

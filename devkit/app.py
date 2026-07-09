@@ -14,6 +14,13 @@ Keyboard:
     ; / '          backlight  - / +            , / .       contrast   - / +
     ESC / q        quit
 
+On-board core (--firmware fw/nec_remote.bin): the RISC-V emulator runs the real
+firmware, whose bit-banged UART drives the OSD. IR keys synthesize remote codes
+into its IR pin so you can test remote-learning live:
+    z / x          send remote code A / B (NEC)      r           reset the core
+Learn-then-match firmware: press z, z -> it learns then matches (input_select 2);
+press z, x -> learns z, x doesn't match (input_select 1).
+
 Serial path: connect a TCP client to localhost:5555 and send framed commands
 (A5 | cmd | len16 | payload | crc8); responses come back the same way. See
 host/dumbtv.py for the framing (point it at a socket, or reuse protocol.py).
@@ -55,6 +62,10 @@ def main():
     ap.add_argument("--port", type=int, default=5555)
     ap.add_argument("--size", default="1280x720")
     ap.add_argument("--canvas", default="160x90")
+    ap.add_argument("--firmware", default=None,
+                    help="run a fw/*.bin on the on-board RISC-V emulator")
+    ap.add_argument("--steps", type=int, default=40000,
+                    help="emulator instructions per rendered frame")
     args = ap.parse_args()
     W, H = (int(v) for v in args.size.lower().split("x"))
     cw, ch = (int(v) for v in args.canvas.lower().split("x"))
@@ -73,6 +84,23 @@ def main():
 
     def send(cmd, payload=b""):
         dev.feed(P.build_frame(cmd, payload))
+
+    # optional on-board RISC-V core running real firmware
+    cpu = ir = None
+    IR_CODES = {"z": 0x00FF12ED, "x": 0x00FF34C2}       # two distinct NEC codes
+
+    def load_firmware(path):
+        from dumbtv_sim.riscv import RV32
+        from dumbtv_sim.ir import IrSource
+        nonlocal cpu, ir
+        ir = IrSource()
+        cpu = RV32(dev, ir_source=ir)
+        with open(path, "rb") as f:
+            cpu.load(f.read())
+        print(f"loaded firmware {path} on the RISC-V emulator")
+
+    if args.firmware:
+        load_firmware(args.firmware)
 
     print(f"listening for host commands on tcp://127.0.0.1:{args.port}")
     print(f"video decoding: {'opencv' if bank.have_cv2 else 'synthetic (no opencv)'}")
@@ -117,6 +145,14 @@ def main():
                     send(P.OP_CONTR, bytes([max(0, osd.contrast - 8)]))
                 elif k == pygame.K_PERIOD:
                     send(P.OP_CONTR, bytes([min(255, osd.contrast + 8)]))
+                elif k in (pygame.K_z, pygame.K_x) and cpu is not None:
+                    ir.send_nec(IR_CODES[pygame.key.name(k)], cpu.icount)
+                elif k == pygame.K_r and args.firmware:
+                    load_firmware(args.firmware)
+
+        # --- on-board core: run firmware; its UART drives dev/osd ---
+        if cpu is not None:
+            cpu.run(args.steps)
 
         # --- render: video -> composite -> window ---
         video = bank.frame(osd.mux_sel, tick)
@@ -125,9 +161,10 @@ def main():
         surf = pygame.surfarray.make_surface(np.transpose(out, (1, 0, 2)))
         screen.blit(surf, (0, 0))
 
+        core = "" if cpu is None else f"  core {'run' if not osd.core_halt else 'halt'}"
         hud = (f"input {osd.mux_sel:2d} [{bank.sources[osd.mux_sel]}]  "
                f"osd {'on' if osd.osd_enable else 'off'}  "
-               f"bright {osd.brightness} contr {osd.contrast} bl {osd.backlight}")
+               f"bright {osd.brightness} contr {osd.contrast} bl {osd.backlight}{core}")
         screen.blit(font.render(hud, True, (255, 255, 0), (0, 0, 0)), (6, H - 22))
         pygame.display.flip()
         tick += 1
