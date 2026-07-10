@@ -155,6 +155,20 @@ static inline void dumbtv_contrast(unsigned char level)     /* 128 = unity */
 static inline void dumbtv_backlight(unsigned char duty)     /* 0..255 PWM */
 { dumbtv_send_frame(DUMBTV_OP_BL, &duty, 1); }
 
+static inline void dumbtv_palette(unsigned char idx, unsigned char a,
+                                  unsigned char r, unsigned char g, unsigned char b)
+{ unsigned char p[5] = {idx, a, r, g, b}; dumbtv_send_frame(DUMBTV_OP_PAL, p, 5); }
+
+static inline void dumbtv_fill_rect(unsigned x, unsigned y, unsigned w, unsigned h,
+                                    unsigned char idx)
+{
+    unsigned char p[9] = {(unsigned char)x, (unsigned char)(x >> 8),
+                          (unsigned char)y, (unsigned char)(y >> 8),
+                          (unsigned char)w, (unsigned char)(w >> 8),
+                          (unsigned char)h, (unsigned char)(h >> 8), idx};
+    dumbtv_send_frame(DUMBTV_OP_FRECT, p, 9);
+}
+
 static inline void dumbtv_clear(unsigned char index)
 { dumbtv_send_frame(DUMBTV_OP_CLEAR, &index, 1); }
 

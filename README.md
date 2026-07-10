@@ -249,6 +249,10 @@ come from the canvas index + palette, not registers.
     - ~~step 6: RC5 (Manchester) decoder~~ — done: `fw/rc5_remote.c` decodes RC5
       bi-phase via edge-interval reconstruction; `tb/test_serv_rc5` proves
       learn-then-match → `mux_sel=2`. NEC + RC5 cover most consumer remotes.
+    - ~~step 7: multi-button learn wizard~~ — done: `fw/learn_remote.c` is an
+      autonomous on-screen wizard that binds 100+ buttons to a `code→action`
+      table (no host needed), then decodes + dispatches. Verified in the dev-kit
+      emulator (`devkit/test_emulator.py`).
 11. **Real I/O** — feed `rgb_in` from a real bridge chip (Lontium/TFP401) and
     drive the parallel-RGB output into an RGB-to-LVDS serializer, on the chosen
     prototype board. (No RTL change — the FPGA is parallel-RGB in and out.)

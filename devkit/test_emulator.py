@@ -60,8 +60,27 @@ def test_rc5_learn():
     print(f"rc5_remote.bin learn+match -> mux_sel={sel}  OK")
 
 
+def test_learn_wizard():
+    """Autonomous multi-button wizard: learn 4 buttons, then a learned press
+    fires its mapped action and an unlearned one is ignored."""
+    from dumbtv_sim.ir import IrSource
+    ir = IrSource()
+    osd, cpu = _cpu("learn_remote.bin", ir)
+    codes = [0x00FF11EE, 0x00FF22DD, 0x00FF33CC, 0x00FF44BB]
+    cpu.run(200_000)                    # boot: prompts, reach the first wait
+    for c in codes:                     # learn phase
+        ir.send_nec(c, cpu.icount); cpu.run(300_000)
+    ir.send_nec(codes[2], cpu.icount); cpu.run(300_000)   # -> input_select(3)
+    assert osd.mux_sel == 3, osd.mux_sel
+    ir.send_nec(0x00FF7788, cpu.icount); cpu.run(300_000)  # unlearned -> ignored
+    assert osd.mux_sel == 3, osd.mux_sel
+    print(f"learn_remote.bin: bound 4, matched code[2] -> input {osd.mux_sel}, "
+          f"unlearned ignored  OK")
+
+
 if __name__ == "__main__":
     test_firmware_drives_osd()
     test_nec_learn()
     test_rc5_learn()
+    test_learn_wizard()
     print("all emulator checks passed")

@@ -21,6 +21,7 @@ Everything else here is one-time boilerplate you don't touch:
 | `ir_remote.c` | example: count IR bursts in a press → pick an input |
 | `nec_remote.c` | example: decode the NEC IR protocol + learn/match a code |
 | `rc5_remote.c` | example: decode RC5 (Manchester) + learn/match a code |
+| `learn_remote.c` | example: autonomous on-screen wizard that learns 100+ buttons |
 | `start.S`   | crt0 (sets stack, zeroes bss, calls main) |
 | `dumbtv.ld` | linker script (16 KB RAM at address 0) |
 | `build.sh`  | one command: source → `.elf` + `.bin` |
@@ -87,8 +88,12 @@ Two worked examples:
   scale-independent.
 - `rc5_remote.c` — decodes **RC5** (Philips, Manchester/bi-phase, 14 bits) by
   measuring edge intervals (re-syncing on every edge, so no timing drift) and
-  learns/matches the same way. Between them these cover most consumer remotes;
-  extend the learn logic to a table for a full learn-N-buttons universal remote.
+  learns/matches the same way. Between them these cover most consumer remotes.
+- `learn_remote.c` — an **autonomous learn wizard**: on boot it walks a list of
+  actions, drawing an on-screen prompt for each and binding the button you press
+  to it (a `code -> action` table sized for a 100+ button universal remote), then
+  runs normally — decode each press, look it up, fire the mapped command. No host
+  needed. Extend the action list and the `do_action` mapping for a full remote.
 
 ## Timing (important on real hardware)
 
