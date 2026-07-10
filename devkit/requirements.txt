@@ -1,0 +1,6 @@
+# Dumb-TV dev kit runtime dependencies (Python 3.9+).
+numpy>=1.21
+pygame>=2.1
+# Optional: real video decoding of vid_0..vid_15 (any codec, via ffmpeg).
+# Without it, all 16 inputs are animated synthetic patterns.
+opencv-python>=4.5

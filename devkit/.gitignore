@@ -3,6 +3,11 @@ __pycache__/
 *.pyc
 out.png
 out.npy
+# local venv + packaging output
+.venv/
+build/
+dist/
+*.egg-info/
 # user-supplied video streams
 vid_*.mp4
 vid_*.mkv

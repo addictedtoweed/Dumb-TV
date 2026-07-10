@@ -10,38 +10,76 @@ suite is the accuracy reference); this is the quick, visible workbench.
 
 It does **not** run at hardware speed or pixel-exactness — and doesn't try to.
 
-## Install
+## Quick start (nothing installed globally)
+
+The launcher makes a local `.venv` the first time, installs the deps into it, and
+runs — nothing touches your system Python. Needs Python 3.9+.
 
 ```sh
-pip install numpy pygame            # required for the app
-pip install opencv-python           # optional: decode real videos (any codec)
+./run.sh                                   # Linux / macOS / WSL
+run.bat                                    # Windows
 ```
 
-## Run
+Or plain, if you already have the deps (`pip install numpy pygame opencv-python`):
 
 ```sh
-python devkit/app.py                        # synthetic streams
-python devkit/app.py --videos ~/clips       # your vid_0..vid_15
-python devkit/app.py --size 1920x1080
+python app.py [--size 1920x1080] [--videos videos] [--firmware ../fw/learn_remote.bin]
 ```
 
-Keyboard:
-
-| key | action | key | action |
-|-----|--------|-----|--------|
-| `0`-`9` | select input 0-9 | `←` / `→` | cycle all 16 inputs |
-| `o` | OSD on/off | `d` | draw a demo OSD panel |
-| `c` | clear OSD | `[` / `]` | brightness − / + |
-| `;` / `'` | backlight − / + | `,` / `.` | contrast − / + |
-| `ESC` / `q` | quit | | |
+For a **truly zero-install** bundle (no Python at all) to hand out on a GitHub
+Release, see *Packaging* below.
 
 ## Video streams
 
-Drop `vid_0` .. `vid_15` (any common container — `.mp4 .mkv .mov .avi .webm`)
-in the videos directory; they're decoded with OpenCV/ffmpeg and looped, **no
-re-encoding**. Any missing stream falls back to a distinct animated synthetic
-pattern (each shows *N+1* white blocks so you can tell the inputs apart), so the
-sim runs with zero files.
+Drop up to 16 clips named `vid_0` .. `vid_15` (any container — `.mp4 .mkv .mov
+.avi .webm .m4v .y4m`) into `videos/`. They're decoded with OpenCV/ffmpeg and
+looped, **no re-encoding**. Any missing input falls back to a distinct animated
+pattern (each shows *N+1* white blocks so you can tell the inputs apart), so it
+runs with zero files.
+
+## Two ways to control it
+
+**1 — keyboard as a virtual remote.** Load a firmware and the keyboard becomes
+the IR remote it decodes/learns:
+
+```sh
+./run.sh --firmware ../fw/learn_remote.bin      # autonomous 100+ button learn wizard
+```
+
+Keys map to distinct remote buttons (`p`=power, `i`=input, `m`=menu, arrows, enter
+=OK, `=`/`-`=vol, PgUp/PgDn=ch, digits `0`-`9`); the legend prints at startup and
+`` ` `` resets the core. With the learn wizard: follow the on-screen prompts,
+press a key per action to bind it, then those keys drive the TV.
+
+Without `--firmware`, the keyboard drives the OSD directly (dev mode): `0`-`9` /
+arrows pick the input, `o` OSD on/off, `d` demo panel, `c` clear.
+
+Panel tweaks always work: `[` `]` brightness, `;` `'` backlight, `,` `.` contrast.
+
+**2 — a script over the virtual serial link.** The app listens on
+`tcp://127.0.0.1:5555`; `control.py` speaks the exact framed UART protocol a host
+MCU would, bypassing the keyboard:
+
+```sh
+python control.py --demo         # scripted OSD + mux demo
+python control.py input 5        # one command
+python control.py                # interactive: type  input 3 / bright 150 / osd on / demo
+```
+
+## Packaging a zero-install release
+
+```sh
+packaging/build.sh          # or packaging\build.bat on Windows
+```
+
+Runs PyInstaller (installing it into the venv) and produces `dist/dumbtv-devkit/`
+— a self-contained folder with the app, the firmware images, and an empty
+`videos/`. Zip that folder and attach it to a GitHub **Release**; anyone can
+unzip, drop in videos, and run the executable with **no Python installed**.
+
+Licensing: the dev-kit code is CC0 (public domain). Bundled builds also carry
+numpy (BSD), pygame (LGPL), and — if you keep real-video decoding — FFmpeg via
+opencv-python (LGPL); ship their licenses with a bundle. See `NOTICE`.
 
 ## Serial path (host control)
 

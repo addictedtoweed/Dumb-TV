@@ -1,0 +1,23 @@
+Dumb-TV dev kit -- third-party components
+=========================================
+
+The dev kit's own source (everything in this directory) is released under
+CC0 1.0 Universal (public domain) -- see LICENSE.
+
+At runtime it uses these libraries, each under its own license (installed
+separately by pip / the launcher, not part of this source):
+
+  numpy          BSD 3-Clause License
+  pygame         GNU LGPL v2.1
+  opencv-python  Apache License 2.0  (bundles FFmpeg, GNU LGPL v2.1)   [optional]
+
+If you redistribute a BUNDLED build (e.g. one produced with PyInstaller), include
+these libraries' license texts alongside it. The LGPL components (pygame, and
+FFmpeg via opencv-python) are dynamically linked; a PyInstaller *onedir* build
+keeps them as separate, replaceable files, which satisfies the LGPL relinking
+requirement. If you don't ship real-video decoding, omit opencv-python/FFmpeg
+entirely -- the sim runs on synthetic patterns with just numpy + pygame.
+
+The vendored SERV RISC-V core (../rtl/serv) is ISC + Apache-2.0; see its own
+LICENSE. It is not part of the dev kit runtime (the dev kit uses its own
+pure-Python RV32I emulator).

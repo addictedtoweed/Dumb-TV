@@ -58,7 +58,7 @@ def demo_osd(send, osd):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--videos", default=os.path.dirname(__file__))
+    ap.add_argument("--videos", default=os.path.join(os.path.dirname(__file__), "videos"))
     ap.add_argument("--port", type=int, default=5555)
     ap.add_argument("--size", default="1280x720")
     ap.add_argument("--canvas", default="160x90")
@@ -87,7 +87,30 @@ def main():
 
     # optional on-board RISC-V core running real firmware
     cpu = ir = None
-    IR_CODES = {"z": 0x00FF12ED, "x": 0x00FF34C2}       # two distinct NEC codes
+
+    # virtual remote: keyboard -> distinct NEC codes (used when a firmware is
+    # loaded, so the keyboard is the remote the firmware decodes/learns).
+    REMOTE = {
+        pygame.K_p: ("POWER", 0x10000001), pygame.K_i: ("INPUT", 0x10000002),
+        pygame.K_m: ("MENU", 0x10000003), pygame.K_RETURN: ("OK", 0x10000004),
+        pygame.K_UP: ("UP", 0x10000005), pygame.K_DOWN: ("DOWN", 0x10000006),
+        pygame.K_LEFT: ("LEFT", 0x10000007), pygame.K_RIGHT: ("RIGHT", 0x10000008),
+        pygame.K_EQUALS: ("VOL+", 0x10000009), pygame.K_MINUS: ("VOL-", 0x1000000A),
+        pygame.K_PAGEUP: ("CH+", 0x1000000B), pygame.K_PAGEDOWN: ("CH-", 0x1000000C),
+    }
+    for n in range(10):                                  # digit buttons 0-9
+        REMOTE[getattr(pygame, f"K_{n}")] = (f"{n}", 0x10000010 + n)
+
+    def resolve_fw(path):
+        # accept an absolute/relative path, or a bare name found in a bundled
+        # fw/ (frozen build) or the repo's ../fw during source runs.
+        here = getattr(sys, "_MEIPASS", os.path.dirname(__file__))
+        for cand in (path, os.path.join(here, "fw", os.path.basename(path)),
+                     os.path.join(os.path.dirname(__file__), "..", "fw",
+                                  os.path.basename(path))):
+            if os.path.exists(cand):
+                return cand
+        return path
 
     def load_firmware(path):
         from dumbtv_sim.riscv import RV32
@@ -95,7 +118,7 @@ def main():
         nonlocal cpu, ir
         ir = IrSource()
         cpu = RV32(dev, ir_source=ir)
-        with open(path, "rb") as f:
+        with open(resolve_fw(path), "rb") as f:
             cpu.load(f.read())
         print(f"loaded firmware {path} on the RISC-V emulator")
 
@@ -104,6 +127,12 @@ def main():
 
     print(f"listening for host commands on tcp://127.0.0.1:{args.port}")
     print(f"video decoding: {'opencv' if bank.have_cv2 else 'synthetic (no opencv)'}")
+    if cpu is not None:
+        keys = "  ".join(f"{pygame.key.name(k)}={n}" for k, (n, _) in REMOTE.items())
+        print("virtual remote (keyboard -> IR):\n  " + keys + "\n  ` = reset core")
+    else:
+        print("keyboard: 0-9/arrows = input, o = OSD, d = demo, c = clear")
+    print("panel: [ ] brightness   ; ' backlight   , . contrast   ESC quit")
 
     tick = 0
     running = True
@@ -119,20 +148,11 @@ def main():
                 running = False
             elif e.type == pygame.KEYDOWN:
                 k = e.key
-                if k in (pygame.K_ESCAPE, pygame.K_q):
+                # meta + panel controls (always available)
+                if k == pygame.K_ESCAPE:
                     running = False
-                elif pygame.K_0 <= k <= pygame.K_9:
-                    send(P.OP_MUXSEL, bytes([k - pygame.K_0]))
-                elif k == pygame.K_RIGHT:
-                    send(P.OP_MUXSEL, bytes([(osd.mux_sel + 1) & 15]))
-                elif k == pygame.K_LEFT:
-                    send(P.OP_MUXSEL, bytes([(osd.mux_sel - 1) & 15]))
-                elif k == pygame.K_o:
-                    send(P.OP_EN, bytes([0 if osd.osd_enable else 1]))
-                elif k == pygame.K_d:
-                    demo_osd(send, osd)
-                elif k == pygame.K_c:
-                    send(P.OP_CLEAR, bytes([0])); send(P.OP_FLIP)
+                elif k == pygame.K_BACKQUOTE and args.firmware:
+                    load_firmware(args.firmware)                    # reset core
                 elif k == pygame.K_LEFTBRACKET:
                     send(P.OP_BRIGHT, bytes([max(0, osd.brightness - 8)]))
                 elif k == pygame.K_RIGHTBRACKET:
@@ -145,10 +165,24 @@ def main():
                     send(P.OP_CONTR, bytes([max(0, osd.contrast - 8)]))
                 elif k == pygame.K_PERIOD:
                     send(P.OP_CONTR, bytes([min(255, osd.contrast + 8)]))
-                elif k in (pygame.K_z, pygame.K_x) and cpu is not None:
-                    ir.send_nec(IR_CODES[pygame.key.name(k)], cpu.icount)
-                elif k == pygame.K_r and args.firmware:
-                    load_firmware(args.firmware)
+                elif cpu is not None:
+                    # firmware loaded: the keyboard is the IR remote
+                    if k in REMOTE:
+                        ir.send_nec(REMOTE[k][1], cpu.icount)
+                else:
+                    # no firmware: drive the OSD / mux directly
+                    if pygame.K_0 <= k <= pygame.K_9:
+                        send(P.OP_MUXSEL, bytes([k - pygame.K_0]))
+                    elif k == pygame.K_RIGHT:
+                        send(P.OP_MUXSEL, bytes([(osd.mux_sel + 1) & 15]))
+                    elif k == pygame.K_LEFT:
+                        send(P.OP_MUXSEL, bytes([(osd.mux_sel - 1) & 15]))
+                    elif k == pygame.K_o:
+                        send(P.OP_EN, bytes([0 if osd.osd_enable else 1]))
+                    elif k == pygame.K_d:
+                        demo_osd(send, osd)
+                    elif k == pygame.K_c:
+                        send(P.OP_CLEAR, bytes([0])); send(P.OP_FLIP)
 
         # --- on-board core: run firmware; its UART drives dev/osd ---
         if cpu is not None:
