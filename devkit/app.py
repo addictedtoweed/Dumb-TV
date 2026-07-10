@@ -77,13 +77,31 @@ def main():
     font = pygame.font.SysFont("monospace", 16)
     clock = pygame.time.Clock()
 
-    osd = OsdModel(osd_w=cw, osd_h=ch)
+    from dumbtv_sim import font
+    osd = OsdModel(osd_w=cw, osd_h=ch, gw=font.GW, gh=font.GH)
     dev = Device(osd)
     bank = VideoBank(directory=args.videos, size=(W, H))
     bridge = SerialBridge(port=args.port)
 
     def send(cmd, payload=b""):
         dev.feed(P.build_frame(cmd, payload))
+
+    # palette + font for OSD text (index 1 = white text, 2 = translucent panel)
+    send(P.OP_PAL, bytes([1, 255, 240, 240, 240]))
+    send(P.OP_PAL, bytes([2, 170, 20, 25, 40]))
+    font.upload(send)
+
+    banner_hide = [0]                                   # tick to auto-hide at
+
+    def show_input_banner():
+        text = f"INPUT {osd.mux_sel}".encode("latin-1")
+        w = len(text) * font.GW + 6
+        send(P.OP_EN, bytes([1]))
+        send(P.OP_CLEAR, bytes([0]))
+        send(P.OP_FRECT, struct.pack("<HHHH", 4, ch - 14, w, 12) + bytes([2]))
+        send(P.OP_TEXT, struct.pack("<HH", 7, ch - 12) + text)
+        send(P.OP_FLIP)
+        banner_hide[0] = tick + 45                      # ~1.5 s at 30 fps
 
     # optional on-board RISC-V core running real firmware
     cpu = ir = None
@@ -173,16 +191,24 @@ def main():
                     # no firmware: drive the OSD / mux directly
                     if pygame.K_0 <= k <= pygame.K_9:
                         send(P.OP_MUXSEL, bytes([k - pygame.K_0]))
+                        show_input_banner()
                     elif k == pygame.K_RIGHT:
                         send(P.OP_MUXSEL, bytes([(osd.mux_sel + 1) & 15]))
+                        show_input_banner()
                     elif k == pygame.K_LEFT:
                         send(P.OP_MUXSEL, bytes([(osd.mux_sel - 1) & 15]))
+                        show_input_banner()
                     elif k == pygame.K_o:
                         send(P.OP_EN, bytes([0 if osd.osd_enable else 1]))
                     elif k == pygame.K_d:
                         demo_osd(send, osd)
                     elif k == pygame.K_c:
                         send(P.OP_CLEAR, bytes([0])); send(P.OP_FLIP)
+
+        # --- auto-hide the input banner after its timeout ---
+        if banner_hide[0] and tick >= banner_hide[0]:
+            send(P.OP_CLEAR, bytes([0])); send(P.OP_FLIP)
+            banner_hide[0] = 0
 
         # --- on-board core: run firmware; its UART drives dev/osd ---
         if cpu is not None:

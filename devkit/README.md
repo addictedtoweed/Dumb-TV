@@ -52,7 +52,8 @@ Keys map to distinct remote buttons (`p`=power, `i`=input, `m`=menu, arrows, ent
 press a key per action to bind it, then those keys drive the TV.
 
 Without `--firmware`, the keyboard drives the OSD directly (dev mode): `0`-`9` /
-arrows pick the input, `o` OSD on/off, `d` demo panel, `c` clear.
+arrows pick the input (an **INPUT #** banner pops up briefly), `o` OSD on/off,
+`d` demo panel, `c` clear.
 
 Panel tweaks always work: `[` `]` brightness, `;` `'` backlight, `,` `.` contrast.
 
