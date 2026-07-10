@@ -77,8 +77,8 @@ def main():
     font = pygame.font.SysFont("monospace", 16)
     clock = pygame.time.Clock()
 
-    from dumbtv_sim import font
-    osd = OsdModel(osd_w=cw, osd_h=ch, gw=font.GW, gh=font.GH)
+    from dumbtv_sim import font as osdfont
+    osd = OsdModel(osd_w=cw, osd_h=ch, gw=osdfont.GW, gh=osdfont.GH)
     dev = Device(osd)
     bank = VideoBank(directory=args.videos, size=(W, H))
     bridge = SerialBridge(port=args.port)
@@ -89,13 +89,13 @@ def main():
     # palette + font for OSD text (index 1 = white text, 2 = translucent panel)
     send(P.OP_PAL, bytes([1, 255, 240, 240, 240]))
     send(P.OP_PAL, bytes([2, 170, 20, 25, 40]))
-    font.upload(send)
+    osdfont.upload(send)
 
     banner_hide = [0]                                   # tick to auto-hide at
 
     def show_input_banner():
         text = f"INPUT {osd.mux_sel}".encode("latin-1")
-        w = len(text) * font.GW + 6
+        w = len(text) * osdfont.GW + 6
         send(P.OP_EN, bytes([1]))
         send(P.OP_CLEAR, bytes([0]))
         send(P.OP_FRECT, struct.pack("<HHHH", 4, ch - 14, w, 12) + bytes([2]))
