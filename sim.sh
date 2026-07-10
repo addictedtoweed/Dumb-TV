@@ -15,6 +15,7 @@ case "$*" in
     *top_uart*) : "${SIM_BUILD:=/tmp/dumbtv_build_uart}" ;;
     *top_rgb*)  : "${SIM_BUILD:=/tmp/dumbtv_build_rgb}" ;;
     *top_mux*)  : "${SIM_BUILD:=/tmp/dumbtv_build_mux}" ;;
+    *rgb_to_lvds*) : "${SIM_BUILD:=/tmp/dumbtv_build_lvds}" ;;
     *top_serv*) : "${SIM_BUILD:=/tmp/dumbtv_build_topserv}" ;;
     *serv_soc*) : "${SIM_BUILD:=/tmp/dumbtv_build_servsoc}" ;;
     *serv_ram*) : "${SIM_BUILD:=/tmp/dumbtv_build_servram}" ;;

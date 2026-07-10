@@ -34,7 +34,8 @@ VERILOG_SOURCES = \
     rtl/cmd_mux.v \
     rtl/fw_mem.v \
     rtl/top_mux.v \
-    rtl/serv_ram_hw.v
+    rtl/serv_ram_hw.v \
+    rtl/rgb_to_lvds.v
 
 # Default target is the compositor pipeline. Run the UART suite with:
 #   make TOPLEVEL=top_uart MODULE=test_uart

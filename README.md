@@ -35,8 +35,17 @@ The whole product is one idea:
    RGB).
 2. **FPGA middleman** — the FPGA takes that parallel RGB, overlays the OSD, and
    emits parallel RGB. This is *all* it does; it never touches the serial links.
-3. **Reserialize** — an off-the-shelf RGB-to-LVDS serializer turns the processed
-   parallel RGB into the serial link the panel wants.
+3. **Reserialize** — the processed pixels reach the panel one of two ways
+   (build-selectable output seam):
+   - `OUTPUT=rgb` — parallel RGB to an off-the-shelf RGB-to-LVDS serializer
+     (FPD-Link / FlatLink). Offloads the SERDES; easiest layout.
+   - `OUTPUT=lvds` — the FPGA drives the LVDS pairs **itself** (`rtl/rgb_to_lvds.v`
+     + device OSERDES). LVDS to an LCD panel is an *open* standard (no licensed
+     IP, unlike the HDMI/DP input), so this keeps the bitstream clean and drops a
+     chip. The mapping is runtime-configurable — 18/24bpp, VESA/JEIDA packing,
+     per-lane + clock + sync polarity — so one bitstream fits many panels: fix an
+     LVDS connector on the FPGA, rework the harness to it, and adapt in software.
+     (Single-link today; dual-link for 1080p60 is a 2px-pipeline follow-on.)
 
 Keeping both serial ends in commodity chips means the FPGA is a pure
 **parallel-RGB processor** — cheap, low pin-count, no transceivers, and carrying
