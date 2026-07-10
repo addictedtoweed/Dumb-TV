@@ -111,7 +111,7 @@ module top_serv #(
         .clk(clk), .rst(rst),
         .addr(ctrl_addr), .wdata(ctrl_wdata), .we(ctrl_we),
         .osd_enable(), .osd_alpha(), .mux_sel(mux_sel),
-        .brightness(), .contrast(), .backlight(), .core_halt(core_halt_w));
+        .brightness(), .contrast(), .backlight(), .core_halt(core_halt_w), .lvds_cfg());
 
     // ---- the SERV SoC: firmware loaded via the parser's FW_WRITE port -------
     serv_soc #(.MEMSIZE(MEMSIZE)) u_serv (

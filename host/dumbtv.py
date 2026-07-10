@@ -29,6 +29,7 @@ OP_GUP, OP_GBLIT, OP_TEXT, OP_FRECT = 0x22, 0x23, 0x24, 0x25
 OP_CLEAR, OP_FLIP, OP_MUXSEL = 0x27, 0x28, 0x40
 OP_BRIGHT, OP_CONTR, OP_BL = 0x30, 0x31, 0x32
 OP_FWHALT, OP_FW, OP_FWSTART = 0x50, 0x51, 0x52
+OP_LVDS = 0x60
 RSP_ACK, RSP_NACK, RSP_INFO = 0x80, 0x81, 0x82
 
 
@@ -112,6 +113,15 @@ class DumbTV:
     def brightness(self, level):  self._cmd(OP_BRIGHT, bytes([level]))  # 128 = neutral
     def contrast(self, level):    self._cmd(OP_CONTR, bytes([level]))   # 128 = unity
     def backlight(self, duty):    self._cmd(OP_BL, bytes([duty]))       # 0..255 PWM
+    def lvds(self, bpp24=True, jeida=False, data_pol=0, clk_pol=False,
+             de_pol=False, hs_pol=False, vs_pol=False):
+        """Native-LVDS output mapping (OUTPUT=lvds builds). data_pol = 4-bit
+        per-lane invert (D0..D3)."""
+        cfg = ((1 if bpp24 else 0) | ((1 if jeida else 0) << 1)
+               | ((1 if clk_pol else 0) << 2) | ((1 if de_pol else 0) << 3)
+               | ((1 if hs_pol else 0) << 4) | ((1 if vs_pol else 0) << 5)
+               | ((data_pol & 0xF) << 6))
+        self._cmd(OP_LVDS, struct.pack("<H", cfg))
     # on-board RISC-V core firmware
     def fw_halt(self):            self._cmd(OP_FWHALT)
     def fw_start(self):           self._cmd(OP_FWSTART)

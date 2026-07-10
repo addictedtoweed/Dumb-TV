@@ -18,7 +18,8 @@ module ctrl_regs (
     output reg [7:0]   brightness,  // picture brightness (128 = neutral)
     output reg [7:0]   contrast,    // picture contrast   (128 = unity gain)
     output reg [7:0]   backlight,   // backlight PWM duty (255 = full on)
-    output reg         core_halt    // SERV core reset (1 = held; FW_HALT/START)
+    output reg         core_halt,   // SERV core reset (1 = held; FW_HALT/START)
+    output reg [15:0]  lvds_cfg     // native-LVDS output mapping (see rgb_to_lvds)
 );
     localparam A_ENABLE = 4'd0;
     localparam A_ALPHA  = 4'd1;
@@ -27,6 +28,7 @@ module ctrl_regs (
     localparam A_CONTR  = 4'd4;
     localparam A_BL     = 4'd5;
     localparam A_CORE   = 4'd6;
+    localparam A_LVDS   = 4'd7;
 
     always @(posedge clk) begin
         if (rst) begin
@@ -37,6 +39,7 @@ module ctrl_regs (
             contrast   <= 8'd128;    // unity
             backlight  <= 8'd255;    // full on (visible out of the box)
             core_halt  <= 1'b1;      // core held until firmware is loaded + FW_START
+            lvds_cfg   <= 16'h0001;  // 24bpp, VESA, no inversion
         end else if (we) begin
             case (addr)
                 A_ENABLE: osd_enable <= wdata[0];
@@ -46,6 +49,7 @@ module ctrl_regs (
                 A_CONTR:  contrast   <= wdata[7:0];
                 A_BL:     backlight  <= wdata[7:0];
                 A_CORE:   core_halt  <= wdata[0];
+                A_LVDS:   lvds_cfg   <= wdata;
                 default:  ; // no-op
             endcase
         end

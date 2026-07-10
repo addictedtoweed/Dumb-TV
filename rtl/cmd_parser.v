@@ -67,14 +67,15 @@ module cmd_parser #(
                OP_FBW  = 8'h20, OP_FBF   = 8'h21, OP_PAL = 8'h26,
                OP_CLEAR = 8'h27, OP_FLIP = 8'h28, OP_MUXSEL = 8'h40,
                OP_BRIGHT = 8'h30, OP_CONTR = 8'h31, OP_BL = 8'h32,
-               OP_FWHALT = 8'h50, OP_FW = 8'h51, OP_FWSTART = 8'h52;
+               OP_FWHALT = 8'h50, OP_FW = 8'h51, OP_FWSTART = 8'h52,
+               OP_LVDS = 8'h60;
     localparam RSP_ACK = 8'h80, RSP_NACK = 8'h81, RSP_INFO = 8'h82;
     localparam ERR_CRC = 8'h01, ERR_LEN  = 8'h02, ERR_UNK  = 8'h03, ERR_RANGE = 8'h04;
     localparam MAX_TEXT = 32;                        // max DRAW_TEXT string length
     localparam [16:0] FW_DEPTH = (17'd1 << FW_AW);   // firmware RAM size in bytes
     // ---- ctrl_regs addresses ----
     localparam A_EN = 4'd0, A_ALPHA = 4'd1, A_MUX = 4'd2, A_BRIGHT = 4'd3,
-               A_CONTR = 4'd4, A_BL = 4'd5, A_CORE = 4'd6;
+               A_CONTR = 4'd4, A_BL = 4'd5, A_CORE = 4'd6, A_LVDS = 4'd7;
     // ---- INFO constants ----
     localparam [15:0] MAX_W = 16'd1920, MAX_H = 16'd1080;
     localparam FW = FB_AW + 1;                       // canvas counter width
@@ -228,6 +229,7 @@ module cmd_parser #(
                         OP_GUP:           bad_len <= (len_full != (16'd1 + GPIX)); // slot + pixels
                         OP_TEXT:          bad_len <= (len_full < 16'd5);   // x y + >=1 char
                         OP_MUXSEL, OP_BRIGHT, OP_CONTR, OP_BL: bad_len <= (len_full != 16'd1);
+                        OP_LVDS:          bad_len <= (len_full != 16'd2);
                         OP_FBW:           bad_len <= (len_full < 16'd3);
                         default:          bad_len <= 1'b0; // unknown -> NACK in EXEC
                     endcase
@@ -374,6 +376,11 @@ module cmd_parser #(
                         end
                         OP_BL: begin                 // backlight PWM duty
                             ctrl_addr <= A_BL; ctrl_wdata <= {8'd0, pbuf[0]};
+                            ctrl_we <= 1'b1;
+                            build_ack(cmd); state <= S_RLOAD;
+                        end
+                        OP_LVDS: begin               // native-LVDS output mapping
+                            ctrl_addr <= A_LVDS; ctrl_wdata <= {pbuf[1], pbuf[0]};
                             ctrl_we <= 1'b1;
                             build_ack(cmd); state <= S_RLOAD;
                         end

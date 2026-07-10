@@ -82,7 +82,7 @@ module top_mux #(
         .clk(clk), .rst(rst),
         .addr(ctrl_addr), .wdata(ctrl_wdata), .we(ctrl_we),
         .osd_enable(), .osd_alpha(), .mux_sel(mux_sel),
-        .brightness(), .contrast(), .backlight(), .core_halt(core_rst));
+        .brightness(), .contrast(), .backlight(), .core_halt(core_rst), .lvds_cfg());
 
     // firmware / program RAM: host writes on port A, read-back on port B
     fw_mem u_fw (

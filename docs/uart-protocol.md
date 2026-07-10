@@ -81,6 +81,7 @@ address gets a `NACK` with the reason code.
 | `0x50` | FW_HALT       | *(none)* — hold the on-board RISC-V core in reset   |
 | `0x51` | FW_WRITE      | `addr`(2) + N firmware bytes (into program RAM)     |
 | `0x52` | FW_START      | *(none)* — release the core (run the firmware)      |
+| `0x60` | LVDS          | `cfg`(2, LE) — native-LVDS output mapping (OUTPUT=lvds) |
 
 ### Field meanings
 
@@ -320,6 +321,13 @@ neutral at `brightness = 128, contrast = 128`.
 inverter's dimming input or an LED-driver PWM/EN. Defaults to full on so the
 panel is lit out of the box.
 
+`LVDS` configures the native-LVDS output stage (`OUTPUT=lvds` builds; ignored by
+`OUTPUT=rgb`). The 16-bit little-endian `cfg`: bit0 `bpp24` (1=24bpp, 0=18bpp),
+bit1 `jeida` (1=JEIDA, 0=VESA/SPWG packing), bit2 `clk_pol`, bit3 `de_pol`,
+bit4 `hs_pol`, bit5 `vs_pol`, bits[9:6] `data_pol` (invert lanes D0..D3). One
+bitstream fits many panels — pick the mapping, rework the harness to the FPGA's
+LVDS connector. Reset default `0x0001` (24bpp, VESA, no inversion).
+
 ## Firmware upload (on-board RISC-V core)
 
 The board can host a small RISC-V core (SERV) with ~16 KB of program RAM for
@@ -366,6 +374,7 @@ INT: little-endian    PIXEL: 4-bit palette index    ADDR: y*osd_w + x
 0x50 FW_HALT                        (hold RISC-V core in reset)
 0x51 FW_WRITE     addr bytes...     (firmware -> program RAM)
 0x52 FW_START                       (release core / run)
+0x60 LVDS         cfg16             (native-LVDS output mapping)
 
 0x80 ACK cmd     0x81 NACK cmd err     0x82 INFO ...
 err: 01 crc  02 len  03 unknown  04 range

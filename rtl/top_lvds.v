@@ -1,11 +1,18 @@
-// top_uart.v
+// top_lvds.v
 //
-// Single-clock top: UART control plane driving the full-screen indexed OSD.
-// The parser writes the canvas indices, the palette, and the control regs.
+// The OUTPUT=lvds seam: the full UART-driven OSD pipeline (like top_uart) with a
+// native-LVDS output stage. The compositor's parallel RGB feeds rgb_to_lvds,
+// whose mapping is set at runtime by the LVDS command (ctrl_regs.lvds_cfg). The
+// 7-bit-per-lane words (d0..d3 + clk_lane) go to per-lane 7:1 OSERDES + LVDS I/O
+// primitives at synthesis (device-specific, not in this module).
+//
+// lvds_cfg bit layout (matches the LVDS command payload, little-endian):
+//   [0] bpp24  [1] jeida  [2] clk_pol  [3] de_pol  [4] hs_pol  [5] vs_pol
+//   [9:6] data_pol[3:0]
 
 `default_nettype none
 
-module top_uart #(
+module top_lvds #(
     parameter CW           = 12,
     parameter OSD_W        = 8,
     parameter OSD_H        = 4,
@@ -20,12 +27,12 @@ module top_uart #(
     output wire        tx,
     output wire [3:0]  mux_sel,
     output wire        backlight,
-    output wire        out_de,
-    output wire        out_hsync,
-    output wire        out_vsync,
-    output wire [7:0]  out_r,
-    output wire [7:0]  out_g,
-    output wire [7:0]  out_b
+    // composited parallel RGB (the rgb_to_lvds input, exposed for observability)
+    output wire        out_de, out_hsync, out_vsync,
+    output wire [7:0]  out_r, out_g, out_b,
+    // native-LVDS lane words (to the OSERDES/IO at synthesis)
+    output wire [6:0]  lvds_d0, lvds_d1, lvds_d2, lvds_d3, lvds_clk,
+    output wire        lvds_word_en
 );
     wire           hsync, vsync, de;
     wire [CW-1:0]  x, y;
@@ -38,7 +45,6 @@ module top_uart #(
 
     wire [7:0] rx_data;  wire rx_valid;
     wire [7:0] tx_data;  wire tx_start, tx_busy;
-
     uart_rx #(.CLKS_PER_BIT(CLKS_PER_BIT)) u_rx (
         .clk(clk), .rst(rst), .rx(rx), .data(rx_data), .valid(rx_valid));
     uart_tx #(.CLKS_PER_BIT(CLKS_PER_BIT)) u_tx (
@@ -62,13 +68,14 @@ module top_uart #(
 
     wire        osd_enable;
     wire [7:0]  osd_alpha, brightness, contrast, bl_duty;
+    wire [15:0] lvds_cfg;
 
     ctrl_regs u_ctrl (
         .clk(clk), .rst(rst),
         .addr(ctrl_addr), .wdata(ctrl_wdata), .we(ctrl_we),
         .osd_enable(osd_enable), .osd_alpha(osd_alpha), .mux_sel(mux_sel),
         .brightness(brightness), .contrast(contrast), .backlight(bl_duty),
-        .core_halt(), .lvds_cfg());
+        .core_halt(), .lvds_cfg(lvds_cfg));
 
     pwm u_pwm (.clk(clk), .rst(rst), .duty(bl_duty), .pwm(backlight));
 
@@ -84,6 +91,17 @@ module top_uart #(
         .flip_req(flip_req), .flip_done(flip_done),
         .out_de(out_de), .out_hsync(out_hsync), .out_vsync(out_vsync),
         .out_r(out_r), .out_g(out_g), .out_b(out_b));
+
+    // native-LVDS output stage: compositor RGB -> FPD-Link lane words
+    rgb_to_lvds u_lvds (
+        .clk(clk), .rst(rst),
+        .de(out_de), .hs(out_hsync), .vs(out_vsync),
+        .r(out_r), .g(out_g), .b(out_b),
+        .cfg_bpp24(lvds_cfg[0]), .cfg_jeida(lvds_cfg[1]),
+        .cfg_data_pol(lvds_cfg[9:6]), .cfg_clk_pol(lvds_cfg[2]),
+        .cfg_de_pol(lvds_cfg[3]), .cfg_hs_pol(lvds_cfg[4]), .cfg_vs_pol(lvds_cfg[5]),
+        .d0(lvds_d0), .d1(lvds_d1), .d2(lvds_d2), .d3(lvds_d3),
+        .clk_lane(lvds_clk), .word_en(lvds_word_en));
 endmodule
 
 `default_nettype wire

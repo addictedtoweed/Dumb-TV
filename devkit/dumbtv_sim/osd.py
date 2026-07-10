@@ -39,6 +39,7 @@ class OsdModel:
         self.backlight = 255
         self.mux_sel = 0
         self.core_halt = 1                              # held until FW_START
+        self.lvds_cfg = 0x0001                          # native-LVDS mapping (24bpp/VESA)
 
         self.fw_ram = bytearray(fw_size)
         self.fw_dirty = False                          # set on FW_WRITE/START
@@ -65,7 +66,8 @@ class OsdModel:
         n = len(payload)
         fixed = {P.OP_EN: 1, P.OP_ALPHA: 1, P.OP_MUXSEL: 1, P.OP_BRIGHT: 1,
                  P.OP_CONTR: 1, P.OP_BL: 1, P.OP_FBF: 5, P.OP_PAL: 5,
-                 P.OP_GBLIT: 5, P.OP_FRECT: 9, P.OP_GUP: 1 + self.GW * self.GH}
+                 P.OP_GBLIT: 5, P.OP_FRECT: 9, P.OP_GUP: 1 + self.GW * self.GH,
+                 P.OP_LVDS: 2}
         zero = {P.OP_PING, P.OP_INFO, P.OP_FLIP, P.OP_FWHALT, P.OP_FWSTART}
         if cmd in fixed and n != fixed[cmd]:
             return self._nack(cmd, P.ERR_LEN)
@@ -206,6 +208,10 @@ class OsdModel:
     def _op_32(self, p):                                # BACKLIGHT
         self.backlight = p[0]
         return self._ack(P.OP_BL)
+
+    def _op_60(self, p):                                # LVDS output mapping
+        self.lvds_cfg = p[0] | (p[1] << 8)              # invisible in preview
+        return self._ack(P.OP_LVDS)
 
     def _op_50(self, p):                                # FW_HALT
         self.core_halt = 1

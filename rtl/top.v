@@ -60,7 +60,7 @@ module top #(
         .addr(ctrl_addr), .wdata(ctrl_wdata), .we(ctrl_we),
         .osd_enable(osd_enable), .osd_alpha(osd_alpha), .mux_sel(mux_sel),
         .brightness(brightness), .contrast(contrast), .backlight(bl_duty),
-        .core_halt());
+        .core_halt(), .lvds_cfg());
 
     pwm u_pwm (.clk(clk), .rst(rst), .duty(bl_duty), .pwm(backlight));
 
